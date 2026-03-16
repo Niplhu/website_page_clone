@@ -43,16 +43,21 @@ class WebsitePageCloneWizard(models.TransientModel):
     def default_get(self, field_list):
         vals = super().default_get(field_list)
         source_page_id = vals.get("source_page_id")
+        source_website_id = vals.get("source_website_id")
+
         if source_page_id:
             source_page = self.env["website.page"].browse(source_page_id)
             vals.setdefault("source_website_id", source_page.website_id.id)
             vals.setdefault("new_name", _("%s (Copia)") % source_page.name)
             vals.setdefault("new_url", self._get_unique_url(source_page.url or "/new-page", vals.get("target_website_id") or source_page.website_id.id))
-            vals.setdefault("new_website_name", _("%s (Copia)") % source_page.website_id.name)
-            if "company_id" in source_page.website_id._fields:
-                vals.setdefault("new_website_company_id", source_page.website_id.company_id.id)
             if "is_published" in source_page._fields:
                 vals.setdefault("publish", bool(source_page.is_published))
+
+        source_website = self.env["website"].browse(vals.get("source_website_id") or source_website_id)
+        if source_website:
+            vals.setdefault("new_website_name", _("%s (Copia)") % source_website.name)
+            if "company_id" in source_website._fields:
+                vals.setdefault("new_website_company_id", source_website.company_id.id)
         return vals
 
     @api.onchange("source_page_id", "target_website_id")
@@ -60,7 +65,8 @@ class WebsitePageCloneWizard(models.TransientModel):
         for wizard in self:
             if not wizard.source_page_id:
                 continue
-            wizard.source_website_id = wizard.source_page_id.website_id
+            if wizard.source_mode == "custom":
+                wizard.source_website_id = wizard.source_page_id.website_id
             wizard.new_name = wizard.new_name or _("%s (Copia)") % wizard.source_page_id.name
             wizard.new_website_name = wizard.new_website_name or _("%s (Copia)") % wizard.source_page_id.website_id.name
             if "company_id" in wizard.source_page_id.website_id._fields and not wizard.new_website_company_id:
@@ -72,6 +78,18 @@ class WebsitePageCloneWizard(models.TransientModel):
     @api.onchange("source_mode")
     def _onchange_source_mode(self):
         for wizard in self:
+            if wizard.source_mode == "complete":
+                if wizard.source_page_id and not wizard.source_website_id:
+                    wizard.source_website_id = wizard.source_page_id.website_id
+                wizard.source_page_id = False
+                wizard.new_name = False
+                wizard.new_url = False
+                if wizard.source_website_id:
+                    wizard.new_website_name = _("%s (Copia)") % wizard.source_website_id.name
+                    if "company_id" in wizard.source_website_id._fields:
+                        wizard.new_website_company_id = wizard.source_website_id.company_id
+                continue
+
             if wizard.source_page_id:
                 wizard.source_website_id = wizard.source_page_id.website_id
 
@@ -80,21 +98,48 @@ class WebsitePageCloneWizard(models.TransientModel):
         for wizard in self:
             if not wizard.source_website_id:
                 continue
-            if wizard.source_page_id and wizard.source_page_id.website_id != wizard.source_website_id:
+
+            if wizard.source_mode == "custom":
+                if wizard.source_page_id and wizard.source_page_id.website_id != wizard.source_website_id:
+                    wizard.source_page_id = False
+                if not wizard.source_page_id:
+                    fallback_page = self.env["website.page"].sudo().search(
+                        [("website_id", "=", wizard.source_website_id.id)],
+                        order="id",
+                        limit=1,
+                    )
+                    wizard.source_page_id = fallback_page
+            else:
                 wizard.source_page_id = False
-            if not wizard.source_page_id:
-                fallback_page = self.env["website.page"].sudo().search(
-                    [("website_id", "=", wizard.source_website_id.id)],
-                    order="id",
-                    limit=1,
-                )
-                wizard.source_page_id = fallback_page
+                wizard.new_website_name = _("%s (Copia)") % wizard.source_website_id.name
+                if "company_id" in wizard.source_website_id._fields:
+                    wizard.new_website_company_id = wizard.source_website_id.company_id
 
     def _resolve_source_website(self):
         self.ensure_one()
         if self.source_mode == "complete":
             return self.source_website_id.sudo()
         return self.source_page_id.website_id.sudo()
+
+    def _cleanup_new_website_pages(self, target_website):
+        page_model = self.env["website.page"].sudo()
+        menu_model = self.env["website.menu"].sudo()
+
+        pages = page_model.search([("website_id", "=", target_website.id)])
+        if pages:
+            menus = menu_model.search(
+                [
+                    ("website_id", "=", target_website.id),
+                    "|",
+                    ("page_id", "in", pages.ids),
+                    "&",
+                    ("url", "=", "/"),
+                    ("parent_id", "!=", False),
+                ]
+            )
+            if menus:
+                menus.unlink()
+            pages.unlink()
 
     def _clone_single_page(self, source_page, target_website, name=None, url=None, publish=None):
         new_view = self._copy_view(source_page, target_website)
@@ -706,8 +751,6 @@ class WebsitePageCloneWizard(models.TransientModel):
             raise UserError(_("La pagina origen es obligatoria en modo custom."))
         if self.source_mode == "complete" and not self.source_website_id:
             raise UserError(_("El sitio web donante es obligatorio en modo completa."))
-        if self.source_mode == "complete" and not self.source_page_id:
-            raise UserError(_("La pagina base es obligatoria en modo completa."))
 
         source_website = self._resolve_source_website()
 
@@ -721,19 +764,15 @@ class WebsitePageCloneWizard(models.TransientModel):
         if target_website.id == source_website.id:
             raise UserError(_("El sitio origen y el sitio destino deben ser distintos."))
 
-        if self.target_mode == "new" and (
-            self.source_mode == "complete" or (self.source_mode == "custom" and self.source_page_id.url == "/")
-        ):
+        if self.target_mode == "new" and self.source_mode == "complete":
+            self._cleanup_new_website_pages(target_website)
+        elif self.target_mode == "new" and self.source_mode == "custom" and self.source_page_id.url == "/":
             self._cleanup_new_website_home(target_website)
 
         if self.source_mode == "complete":
             source_pages = self.env["website.page"].sudo().search([("website_id", "=", source_website.id)], order="id")
             if not source_pages:
                 raise UserError(_("El sitio web donante seleccionado no tiene paginas para clonar."))
-
-            if self.source_page_id and self.source_page_id.website_id == source_website:
-                ordered_ids = [self.source_page_id.id] + [pid for pid in source_pages.ids if pid != self.source_page_id.id]
-                source_pages = self.env["website.page"].sudo().browse(ordered_ids)
 
             target_page = self.env["website.page"]
             for source_page in source_pages:

@@ -9,7 +9,7 @@
                     <group>
                         <field name="source_mode"/>
                         <field name="source_website_id" required="source_mode == 'complete'"/>
-                        <field name="source_page_id" domain="[('website_id', '=', source_website_id)]" required="source_mode == 'custom' or source_mode == 'complete'"/>
+                        <field name="source_page_id" domain="[('website_id', '=', source_website_id)]" required="source_mode == 'custom'" invisible="source_mode == 'complete'"/>
                         <field name="target_mode"/>
                         <field name="target_website_id" invisible="target_mode != 'existing'" required="target_mode == 'existing'" domain="[('id', '!=', source_website_id)]"/>
                         <field name="new_website_name" invisible="target_mode != 'new'" required="target_mode == 'new'"/>
