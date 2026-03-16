@@ -8,7 +8,6 @@ class WebsitePage(models.Model):
         self.ensure_one()
         action = self.env.ref("website_page_clone.action_website_page_clone_wizard").read()[0]
         action["context"] = {
-            "default_source_page_id": self.id,
             "default_source_website_id": self.website_id.id,
             "default_target_website_id": self.website_id.id,
         }
