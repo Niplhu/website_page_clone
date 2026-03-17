@@ -13,5 +13,11 @@ class Website(models.Model):
             "active_ids": [self.id],
             "default_source_mode": "complete",
             "default_source_website_id": self.id,
+            "default_target_mode": "new",
+            "default_copy_shop": True,
+            "default_copy_shop_settings": True,
+            "default_copy_shop_pricelists": True,
+            "default_copy_shop_categories": True,
+            "default_copy_shop_products": True,
         }
         return action

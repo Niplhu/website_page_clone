@@ -59,14 +59,30 @@ class WebsitePageCloneWizard(models.TransientModel):
         return ctx.get("active_id") or False
 
     @api.model
+    def _get_context_source_website_id(self):
+        ctx = self.env.context
+        if ctx.get("active_model") != "website":
+            return False
+
+        active_ids = [website_id for website_id in (ctx.get("active_ids") or []) if website_id]
+        if len(active_ids) > 1:
+            raise UserError(_(
+                "Debes seleccionar un unico sitio web origen para abrir el asistente de clonacion."
+            ))
+        if len(active_ids) == 1:
+            return active_ids[0]
+        return ctx.get("active_id") or False
+
+    @api.model
     def default_get(self, field_list):
         vals = super().default_get(field_list)
         source_page_id = vals.get("source_page_id") or self.env.context.get("default_source_page_id")
         source_website_id = vals.get("source_website_id") or self.env.context.get("default_source_website_id")
         context_source_page_id = self._get_context_source_page_id()
+        context_source_website_id = self._get_context_source_website_id()
 
-        if not source_website_id and self.env.context.get("active_model") == "website":
-            source_website_id = self.env.context.get("active_id")
+        if not source_website_id and context_source_website_id:
+            source_website_id = context_source_website_id
             vals.setdefault("source_website_id", source_website_id)
             vals.setdefault("source_mode", "complete")
             vals.setdefault("copy_shop", True)
@@ -74,6 +90,9 @@ class WebsitePageCloneWizard(models.TransientModel):
             vals.setdefault("copy_shop_pricelists", True)
             vals.setdefault("copy_shop_categories", True)
             vals.setdefault("copy_shop_products", True)
+
+        if vals.get("source_mode") == "complete":
+            vals["source_page_id"] = False
 
         if not source_page_id and context_source_page_id:
             source_page_id = context_source_page_id
@@ -118,6 +137,8 @@ class WebsitePageCloneWizard(models.TransientModel):
                 if wizard.source_page_id and not wizard.source_website_id:
                     wizard.source_website_id = wizard.source_page_id.website_id
                 wizard.source_page_id = False
+                wizard.target_mode = "new"
+                wizard.target_website_id = False
                 wizard.new_name = False
                 wizard.new_url = False
                 wizard.copy_shop = True
@@ -149,6 +170,18 @@ class WebsitePageCloneWizard(models.TransientModel):
                 if "company_id" in wizard.source_website_id._fields:
                     wizard.new_website_company_id = wizard.source_website_id.company_id
 
+    @api.constrains("source_mode", "source_page_id", "source_website_id", "target_mode", "target_website_id")
+    def _check_clone_scope(self):
+        for wizard in self:
+            if wizard.source_mode == "custom" and not wizard.source_page_id:
+                raise UserError(_("La pagina origen es obligatoria en modo custom."))
+            if wizard.source_mode == "complete" and not wizard.source_website_id:
+                raise UserError(_("El sitio web donante es obligatorio en modo completa."))
+            if wizard.source_mode == "complete" and wizard.target_mode == "existing":
+                raise UserError(_(
+                    "Para garantizar un clon 1:1 del sitio web completo, el destino debe ser un sitio nuevo."
+                ))
+
     def _resolve_source_page(self):
         self.ensure_one()
         source_page = self.source_page_id.sudo().exists()
@@ -175,7 +208,10 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _resolve_source_website(self):
         self.ensure_one()
         if self.source_mode == "complete":
-            return self.source_website_id.sudo()
+            source_website = self.source_website_id.sudo().exists()
+            if not source_website:
+                raise UserError(_("Debes seleccionar un sitio web donante valido."))
+            return source_website
         return self._resolve_source_page().website_id.sudo()
 
     def _cleanup_new_website_pages(self, target_website):
