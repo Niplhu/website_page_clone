@@ -866,7 +866,10 @@ class WebsitePageCloneWizard(models.TransientModel):
 
     def _get_website_view_by_key(self, website, key):
         website_scoped = website.with_context(website_id=website.id)
-        return website_scoped.viewref(key)
+        try:
+            return website_scoped.viewref(key)
+        except ValueError:
+            return self.env["ir.ui.view"].sudo()
 
     def _get_website_specific_view_by_key(self, website, key):
         return self.env["ir.ui.view"].sudo().search(
