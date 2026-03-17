@@ -804,6 +804,25 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _shop_toggle_view_keys(self):
         """Editor toggle views that must mirror *effective* active state."""
         return (
+            "website_sale.search",
+            "website_sale.sort",
+            "website_sale.add_grid_or_list_option",
+            "website_sale.products_categories",
+            "website_sale.products_categories_top",
+            "website_sale.products_categories_list_collapsible",
+            "website_sale.products_attributes",
+            "website_sale.products_attributes_top",
+            "website_sale.filter_products_price",
+            "website_sale.filter_products_tags",
+            "website_sale.products_design_cards",
+            "website_sale.products_design_thumbs",
+            "website_sale.products_design_grid",
+            "website_sale.products_thumb_4_3",
+            "website_sale.products_thumb_4_5",
+            "website_sale.products_thumb_2_3",
+            "website_sale.products_thumb_cover",
+            "website_sale.products_add_to_cart",
+            "website_sale.products_description",
             "website_sale.extra_info",
             "website_sale.suggested_products_list",
             "website_sale.reduction_code",
@@ -910,6 +929,14 @@ class WebsitePageCloneWizard(models.TransientModel):
 
                 if self.copy_translations:
                     self._copy_translated_field_values(source_view, target_view, "arch_db")
+
+                _logger.info(
+                    "Shop toggle synced: key=%s source_website_id=%s target_website_id=%s active=%s",
+                    key,
+                    source_website.id,
+                    target_website.id,
+                    source_state,
+                )
 
     def _clone_shop_custom_views(self, source_website, target_website):
         source_views = self._collect_shop_custom_views(source_website)
