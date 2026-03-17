@@ -1024,6 +1024,74 @@ class WebsitePageCloneWizard(models.TransientModel):
             target_website.id,
         )
 
+    def _forced_header_cart_specs(self):
+        return [
+            (
+                "website.template_header_default",
+                "//t[@t-call='website.placeholder_header_search_box']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'o_navlink_background btn position-relative rounded-circle p-1 text-center text-reset'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_mobile",
+                "//ul[hasclass('o_header_mobile_buttons_wrap')]//li",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative rounded-circle border-0 p-1 text-reset'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+</t>
+                """.strip(),
+            ),
+        ]
+
+    def _force_cart_in_active_headers(self, target_website):
+        view_model = self.env["ir.ui.view"].sudo()
+        for template_xmlid, xpath_expr, position, snippet in self._forced_header_cart_specs():
+            try:
+                inherit_view = self.env.ref(template_xmlid)
+            except ValueError:
+                continue
+
+            key = "website_page_clone.force_%s_%s" % (template_xmlid.replace(".", "_"), target_website.id)
+            target_view = view_model.search([
+                ("website_id", "=", target_website.id),
+                ("key", "=", key),
+            ], limit=1)
+
+            arch_db = "<xpath expr=\"%s\" position=\"%s\">%s</xpath>" % (
+                xpath_expr,
+                position,
+                snippet,
+            )
+            vals = {
+                "name": "Force cart in %s" % template_xmlid,
+                "type": "qweb",
+                "key": key,
+                "website_id": target_website.id,
+                "inherit_id": inherit_view.id,
+                "arch_db": arch_db,
+                "active": True,
+                "priority": 10000,
+            }
+            if target_view:
+                target_view.write(vals)
+            else:
+                view_model.create(vals)
+
+            _logger.info(
+                "Forced cart injection synced: target_website_id=%s template=%s",
+                target_website.id,
+                template_xmlid,
+            )
+
     def _clone_shop_custom_views(self, source_website, target_website):
         source_views = self._collect_shop_custom_views(source_website)
         if not source_views:
@@ -1282,6 +1350,7 @@ class WebsitePageCloneWizard(models.TransientModel):
             self._sync_shop_header_bridge_views(source_website, target_website)
             self._sync_shop_toggle_views(source_website, target_website)
             self._ensure_cart_link_visibility(source_website, target_website)
+            self._force_cart_in_active_headers(target_website)
         if self.copy_shop_categories:
             category_map = self._clone_shop_categories(source_website, target_website, source_products)
         if self.copy_shop_products:
