@@ -832,6 +832,22 @@ class WebsitePageCloneWizard(models.TransientModel):
             "website_sale.product_buy_now",
         )
 
+    def _shop_header_bridge_view_keys(self):
+        return (
+            "website_sale.template_header_mobile",
+            "website_sale.template_header_default",
+            "website_sale.template_header_hamburger",
+            "website_sale.template_header_stretch",
+            "website_sale.template_header_vertical",
+            "website_sale.template_header_search",
+            "website_sale.template_header_sales_one",
+            "website_sale.template_header_sales_two",
+            "website_sale.template_header_sales_three",
+            "website_sale.template_header_sales_four",
+            "website_sale.template_header_sidebar",
+            "website_sale.template_header_boxed",
+        )
+
     def _is_shop_toggle_view_key(self, key):
         return bool(key) and key in self._shop_toggle_view_keys()
 
@@ -941,6 +957,36 @@ class WebsitePageCloneWizard(models.TransientModel):
                     target_website.id,
                     source_state,
                 )
+
+    def _sync_shop_header_bridge_views(self, source_website, target_website):
+        for key in self._shop_header_bridge_view_keys():
+            source_view = self._get_website_view_by_key(source_website, key)
+            if not source_view:
+                continue
+
+            target_view = self._ensure_target_website_view(target_website, key)
+            if not target_view:
+                continue
+
+            write_vals = {
+                "name": source_view.name,
+                "priority": source_view.priority,
+                "active": source_view.active,
+            }
+            if source_view.arch_db:
+                write_vals["arch_db"] = source_view.arch_db
+            target_view.write(write_vals)
+
+            if self.copy_translations:
+                self._copy_translated_field_values(source_view, target_view, "arch_db")
+
+            _logger.info(
+                "Shop header bridge synced: key=%s source_website_id=%s target_website_id=%s active=%s",
+                key,
+                source_website.id,
+                target_website.id,
+                source_view.active,
+            )
 
     def _clone_shop_custom_views(self, source_website, target_website):
         source_views = self._collect_shop_custom_views(source_website)
@@ -1189,6 +1235,7 @@ class WebsitePageCloneWizard(models.TransientModel):
         if self.copy_shop_settings:
             self._copy_shop_settings(source_website, target_website, pricelist_map)
             self._clone_shop_custom_views(source_website, target_website)
+            self._sync_shop_header_bridge_views(source_website, target_website)
             self._sync_shop_toggle_views(source_website, target_website)
         if self.copy_shop_categories:
             category_map = self._clone_shop_categories(source_website, target_website, source_products)
