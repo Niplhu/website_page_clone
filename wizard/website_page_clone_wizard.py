@@ -988,6 +988,42 @@ class WebsitePageCloneWizard(models.TransientModel):
                 source_view.active,
             )
 
+    def _ensure_cart_link_visibility(self, source_website, target_website):
+        view_model = self.env["ir.ui.view"].sudo()
+        key = "website_page_clone.force_header_cart_link_%s" % target_website.id
+        target_view = view_model.search([
+            ("website_id", "=", target_website.id),
+            ("key", "=", key),
+        ], limit=1)
+
+        arch_db = """
+<xpath expr="//t[@t-set='show_cart']" position="replace">
+    <t t-set="show_cart" t-value="True"/>
+</xpath>
+        """.strip()
+
+        vals = {
+            "name": "Force cart visibility",
+            "type": "qweb",
+            "key": key,
+            "website_id": target_website.id,
+            "inherit_id": self.env.ref("website_sale.header_cart_link").id,
+            "arch_db": arch_db,
+            "active": True,
+            "priority": 9999,
+        }
+
+        if target_view:
+            target_view.write(vals)
+        else:
+            view_model.create(vals)
+
+        _logger.info(
+            "Forced cart visibility on target website: source_website_id=%s target_website_id=%s",
+            source_website.id,
+            target_website.id,
+        )
+
     def _clone_shop_custom_views(self, source_website, target_website):
         source_views = self._collect_shop_custom_views(source_website)
         if not source_views:
@@ -1245,6 +1281,7 @@ class WebsitePageCloneWizard(models.TransientModel):
             self._clone_shop_custom_views(source_website, target_website)
             self._sync_shop_header_bridge_views(source_website, target_website)
             self._sync_shop_toggle_views(source_website, target_website)
+            self._ensure_cart_link_visibility(source_website, target_website)
         if self.copy_shop_categories:
             category_map = self._clone_shop_categories(source_website, target_website, source_products)
         if self.copy_shop_products:
