@@ -38,7 +38,7 @@ class WebsitePageCloneWizard(models.TransientModel):
     copy_translations = fields.Boolean(default=True, string="Copiar traducciones")
     copy_shop = fields.Boolean(default=True, string="Clonar tienda")
     copy_shop_settings = fields.Boolean(default=True, string="Clonar ajustes de tienda")
-    copy_shop_pricelists = fields.Boolean(default=True, string="Clonar tarifas")
+    copy_shop_pricelists = fields.Boolean(default=True, string="Usar tarifas existentes")
     copy_shop_categories = fields.Boolean(default=True, string="Clonar categorias de tienda")
     copy_shop_products = fields.Boolean(default=True, string="Usar productos existentes")
     publish = fields.Boolean(default=False, string="Publicar pagina clonada")
@@ -1027,6 +1027,18 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _forced_header_cart_specs(self):
         return [
             (
+                "website.template_header_mobile",
+                "//ul[hasclass('o_header_mobile_buttons_wrap')]//li",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative rounded-circle border-0 p-1 text-reset'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+</t>
+                """.strip(),
+            ),
+            (
                 "website.template_header_default",
                 "//t[@t-call='website.placeholder_header_search_box']",
                 "before",
@@ -1039,13 +1051,130 @@ class WebsitePageCloneWizard(models.TransientModel):
                 """.strip(),
             ),
             (
-                "website.template_header_mobile",
-                "//ul[hasclass('o_header_mobile_buttons_wrap')]//li",
+                "website.template_header_hamburger",
+                "//t[@t-call='portal.placeholder_user_sign_in']",
                 "before",
                 """
 <t t-call="website_sale.header_cart_link">
     <t t-set="_icon" t-value="True"/>
-    <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative rounded-circle border-0 p-1 text-reset'"/>
+    <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative rounded-pill p-1 text-reset'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_stretch",
+                "//t[@t-call='website.placeholder_header_social_links']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_item_class" t-value="'border-start o_border_contrast'"/>
+    <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative d-flex align-items-center h-100 rounded-0 p-2 text-reset'"/>
+    <t t-set="_badge_class" t-value="'rounded'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_vertical",
+                "//t[@t-call='portal.placeholder_user_sign_in']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'o_navlink_background btn position-relative rounded-circle p-1 text-reset'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_search",
+                "//t[@t-call='portal.placeholder_user_sign_in']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_text" t-value="True"/>
+    <t t-set="_item_class" t-value="'border-start o_border_contrast'"/>
+    <t t-set="_link_class" t-value="'o_navlink_background_hover btn btn-sm d-flex align-items-center gap-1 h-100 rounded-0 p-2 text-reset'"/>
+    <t t-set="_badge_class" t-value="'rounded'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_sales_one",
+                "//t[@t-call='portal.user_dropdown']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'btn position-relative rounded-circle p-1 text-reset o_navlink_background'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_sales_two",
+                "//t[@t-call='portal.placeholder_user_sign_in']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_text" t-value="True"/>
+    <t t-set="_icon_wrap_class" t-value="'position-relative me-2 rounded-circle border p-2 bg-o-color-3 o_border_contrast'"/>
+    <t t-set="_link_class" t-value="'btn d-flex align-items-center fw-bold text-reset o_navlink_background_hover'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+    <t t-set="_text_class" t-value="'small'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_sales_three",
+                "//t[@t-call='website.placeholder_header_language_selector']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_text" t-value="True"/>
+    <t t-set="_item_class" t-value="'position-relative'"/>
+    <t t-set="_link_class" t-value="'nav-link d-flex flex-row-reverse align-items-center text-uppercase fw-bold'"/>
+    <t t-set="_icon_wrap_class" t-value="'d-contains'"/>
+    <t t-set="_badge_class" t-value="'top-0 d-block ms-2'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_sales_four",
+                "//t[@t-call='website.placeholder_header_call_to_action']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative rounded-pill p-1 text-reset'"/>
+    <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
+</t>
+                """.strip(),
+            ),
+            (
+                "website.template_header_sidebar",
+                "//t[@t-call='website.placeholder_header_brand']",
+                "after",
+                """
+<div class="d-flex ms-auto mb-0">
+    <t t-call="website_sale.header_cart_link">
+        <t t-set="_icon" t-value="True"/>
+        <t t-set="_link_class" t-value="'o_navlink_background_hover btn position-relative p-1 rounded-circle text-reset'"/>
+        <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 rounded-pill mt-n1 me-n1'"/>
+    </t>
+</div>
+                """.strip(),
+            ),
+            (
+                "website.template_header_boxed",
+                "//t[@t-call='website.placeholder_header_search_box']",
+                "before",
+                """
+<t t-call="website_sale.header_cart_link">
+    <t t-set="_icon" t-value="True"/>
+    <t t-set="_link_class" t-value="'o_navlink_background btn position-relative rounded-circle p-1 text-center text-reset'"/>
     <t t-set="_badge_class" t-value="'position-absolute top-0 end-0 mt-n1 me-n1 rounded-pill'"/>
 </t>
                 """.strip(),
@@ -1055,10 +1184,15 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _force_cart_in_active_headers(self, target_website):
         view_model = self.env["ir.ui.view"].sudo()
         for template_xmlid, xpath_expr, position, snippet in self._forced_header_cart_specs():
-            try:
-                inherit_view = self.env.ref(template_xmlid)
-            except ValueError:
-                continue
+            inherit_view = self.env["ir.ui.view"].sudo().search([
+                ("website_id", "=", target_website.id),
+                ("key", "=", template_xmlid),
+            ], limit=1)
+            if not inherit_view:
+                try:
+                    inherit_view = self.env.ref(template_xmlid)
+                except ValueError:
+                    continue
 
             key = "website_page_clone.force_%s_%s" % (template_xmlid.replace(".", "_"), target_website.id)
             target_view = view_model.search([
@@ -1181,19 +1315,31 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _clone_shop_pricelists(self, source_website, target_website):
         pricelist_map = {}
         source_pricelists = self._get_source_pricelists(source_website)
+        reused_global_pricelists = 0
+        shared_specific_pricelists = 0
+        skipped_pricelists = 0
         for source_pricelist in source_pricelists:
-            defaults = {"name": source_pricelist.name}
             if "website_id" in source_pricelist._fields:
-                defaults["website_id"] = target_website.id
-            cloned_pricelist = source_pricelist.copy(default=defaults)
-            pricelist_map[source_pricelist.id] = cloned_pricelist
-            if self.copy_translations:
-                self._copy_model_translations(source_pricelist, cloned_pricelist)
+                if not source_pricelist.website_id:
+                    pricelist_map[source_pricelist.id] = source_pricelist
+                    reused_global_pricelists += 1
+                    continue
+                if source_pricelist.website_id.id == target_website.id:
+                    pricelist_map[source_pricelist.id] = source_pricelist
+                    shared_specific_pricelists += 1
+                    continue
+                skipped_pricelists += 1
+                continue
+
+            pricelist_map[source_pricelist.id] = source_pricelist
+            reused_global_pricelists += 1
         _logger.info(
-            "Shop pricelists cloned: source_website_id=%s target_website_id=%s count=%s",
+            "Existing pricelists reused/shared: source_website_id=%s target_website_id=%s reused_global=%s shared_specific=%s skipped=%s",
             source_website.id,
             target_website.id,
-            len(source_pricelists),
+            reused_global_pricelists,
+            shared_specific_pricelists,
+            skipped_pricelists,
         )
         return pricelist_map
 
@@ -1289,38 +1435,52 @@ class WebsitePageCloneWizard(models.TransientModel):
 
     def _clone_shop_products(self, source_products, source_website, target_website, category_map):
         product_map = {}
+        reused_global_products = 0
+        linked_products = 0
         skipped_products = 0
         for source_product in source_products:
             vals = {}
+            is_global_product = False
+
             if "website_ids" in source_product._fields:
-                target_ids = set(source_product.website_ids.ids)
-                target_ids.add(target_website.id)
-                vals["website_ids"] = [(6, 0, list(target_ids))]
+                current_website_ids = set(source_product.website_ids.ids)
+                is_global_product = not current_website_ids
+                if current_website_ids and target_website.id not in current_website_ids:
+                    current_website_ids.add(target_website.id)
+                    vals["website_ids"] = [(6, 0, list(current_website_ids))]
             elif "website_id" in source_product._fields:
-                if not source_product.website_id:
-                    vals["website_id"] = target_website.id
-                elif source_product.website_id.id != target_website.id:
+                is_global_product = not bool(source_product.website_id)
+                if source_product.website_id and source_product.website_id.id == source_website.id:
                     skipped_products += 1
-            if "public_categ_ids" in source_product._fields:
+                elif source_product.website_id and source_product.website_id.id != target_website.id:
+                    skipped_products += 1
+            else:
+                is_global_product = True
+
+            if not is_global_product and "public_categ_ids" in source_product._fields:
                 mapped_categ_ids = [
                     category_map[cid].id for cid in source_product.public_categ_ids.ids if cid in category_map
                 ]
                 merged_categ_ids = set(source_product.public_categ_ids.ids)
                 merged_categ_ids.update(mapped_categ_ids)
                 vals["public_categ_ids"] = [(6, 0, list(merged_categ_ids))]
-            if "website_published" in source_product._fields:
+            if not is_global_product and "website_published" in source_product._fields:
                 vals["website_published"] = source_product.website_published
-            if "is_published" in source_product._fields:
+            if not is_global_product and "is_published" in source_product._fields:
                 vals["is_published"] = source_product.is_published
 
             if vals:
                 source_product.sudo().write(vals)
+                linked_products += 1
+            elif is_global_product:
+                reused_global_products += 1
             product_map[source_product.id] = source_product
         _logger.info(
-            "Existing products linked to website: source_website_id=%s target_website_id=%s linked=%s skipped=%s",
+            "Existing products reused/shared: source_website_id=%s target_website_id=%s reused_global=%s shared_specific=%s skipped=%s",
             source_website.id,
             target_website.id,
-            len(source_products),
+            reused_global_products,
+            linked_products,
             skipped_products,
         )
         return product_map
