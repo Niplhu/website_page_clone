@@ -177,10 +177,6 @@ class WebsitePageCloneWizard(models.TransientModel):
                 raise UserError(_("La pagina origen es obligatoria en modo custom."))
             if wizard.source_mode == "complete" and not wizard.source_website_id:
                 raise UserError(_("El sitio web donante es obligatorio en modo completa."))
-            if wizard.source_mode == "complete" and wizard.target_mode == "existing":
-                raise UserError(_(
-                    "Para garantizar un clon 1:1 del sitio web completo, el destino debe ser un sitio nuevo."
-                ))
 
     def _resolve_source_page(self):
         self.ensure_one()
@@ -1079,6 +1075,9 @@ class WebsitePageCloneWizard(models.TransientModel):
 
     def action_clone_page(self):
         self.ensure_one()
+
+        if self.source_mode == "complete" and self.target_mode != "new":
+            self.write({"target_mode": "new", "target_website_id": False})
 
         _logger.info(
             "Clone request: source_mode=%s source_page_id=%s source_website_id=%s target_mode=%s target_website_id=%s active_ids=%s copy_shop=%s copy_shop_settings=%s copy_shop_pricelists=%s copy_shop_categories=%s copy_shop_products=%s",
