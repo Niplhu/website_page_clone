@@ -248,6 +248,11 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         target_page = self.env["website.page"].sudo().create(page_vals)
 
+        if "is_published" in target_page._fields and "is_published" in source_page._fields:
+            target_page.sudo().write({
+                "is_published": bool(source_page.is_published if publish is None else publish)
+            })
+
         if "page_ids" in new_view._fields:
             new_view.write({"page_ids": [(6, 0, [target_page.id])]})
 
@@ -259,6 +264,16 @@ class WebsitePageCloneWizard(models.TransientModel):
             self._copy_translations(source_page, target_page, source_view, new_view)
 
         return target_page
+
+    def _collect_menu_tree(self, root_menu):
+        menu_model = self.env["website.menu"].sudo()
+        menus = menu_model.browse()
+        queue = root_menu
+        while queue:
+            menus |= queue
+            children = menu_model.search([("parent_id", "in", queue.ids)], order="sequence,id")
+            queue = children - menus
+        return menus.sorted(key=lambda menu: (menu.parent_id.id or 0, menu.sequence, menu.id))
 
     def _create_target_website(self, source_website):
         if not (self.new_website_name or "").strip():
@@ -609,12 +624,26 @@ class WebsitePageCloneWizard(models.TransientModel):
             ("website_id", "=", target_website.id),
         ]).unlink()
 
-    def _clone_complete_menu_tree(self, source_website, target_website, page_map):
-        menu_model = self.env["website.menu"].sudo()
-        source_menus = menu_model.search(
+    def _collect_source_menus_for_website(self, source_website):
+        root_menu = False
+        for field_name in ("menu_id", "home_menu_id", "homepage_menu_id"):
+            if field_name in source_website._fields and source_website[field_name]:
+                root_menu = source_website[field_name]
+                break
+
+        if root_menu:
+            menus = self._collect_menu_tree(root_menu)
+            if menus:
+                return menus
+
+        return self.env["website.menu"].sudo().search(
             [("website_id", "=", source_website.id)],
             order="parent_id,sequence,id",
         )
+
+    def _clone_complete_menu_tree(self, source_website, target_website, page_map):
+        menu_model = self.env["website.menu"].sudo()
+        source_menus = self._collect_source_menus_for_website(source_website)
         menu_map = {}
 
         for source_menu in source_menus:
@@ -647,10 +676,11 @@ class WebsitePageCloneWizard(models.TransientModel):
             target_website.sudo().write(website_vals)
 
         _logger.info(
-            "Website menus cloned: source_website_id=%s target_website_id=%s count=%s",
+            "Website menus cloned: source_website_id=%s target_website_id=%s count=%s names=%s",
             source_website.id,
             target_website.id,
             len(source_menus),
+            source_menus.mapped("name"),
         )
         return menu_map
 
@@ -661,9 +691,22 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         page_map = {}
         target_page = self.env["website.page"]
+        _logger.info(
+            "Source pages collected for clone: website_id=%s pages=%s",
+            source_website.id,
+            [(page.id, page.url, page.website_id.id) for page in source_pages],
+        )
         for source_page in source_pages:
             target_page = self._clone_single_page(source_page, target_website)
             page_map[source_page.id] = target_page
+            _logger.info(
+                "Page cloned: source_page_id=%s source_url=%s target_page_id=%s target_url=%s published=%s",
+                source_page.id,
+                source_page.url,
+                target_page.id,
+                target_page.url,
+                getattr(target_page, "is_published", False),
+            )
         _logger.info(
             "Website pages cloned: source_website_id=%s target_website_id=%s count=%s",
             source_website.id,
@@ -1134,6 +1177,9 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         if self.source_mode == "complete" and self.target_mode != "new":
             self.write({"target_mode": "new", "target_website_id": False})
+        if self.source_mode == "complete" and self.copy_shop and not self.copy_shop_products:
+            self.write({"copy_shop_products": True})
+            self.copy_shop_products = True
 
         _logger.info(
             "Clone request: source_mode=%s source_page_id=%s source_website_id=%s target_mode=%s target_website_id=%s active_ids=%s copy_shop=%s copy_shop_settings=%s copy_shop_pricelists=%s copy_shop_categories=%s copy_shop_products=%s",
