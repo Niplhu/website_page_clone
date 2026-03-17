@@ -1,2 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<odoo/>
+<odoo>
+    <record id="action_website_clone_wizard" model="ir.actions.act_window">
+        <field name="name">Clonar sitio web</field>
+        <field name="res_model">website.page.clone.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="binding_model_id" ref="website.model_website"/>
+        <field name="binding_view_types">form,list</field>
+        <field name="view_id" ref="website_page_clone.view_website_page_clone_wizard_form"/>
+        <field name="context">{'default_source_mode': 'complete', 'default_copy_shop': True, 'default_copy_shop_settings': True, 'default_copy_shop_pricelists': True, 'default_copy_shop_categories': True, 'default_copy_shop_products': True}</field>
+    </record>
+</odoo>
