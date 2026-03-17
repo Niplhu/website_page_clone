@@ -1,7 +1,11 @@
+import logging
 import re
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
+
+
+_logger = logging.getLogger(__name__)
 
 
 class WebsitePageCloneWizard(models.TransientModel):
@@ -40,13 +44,35 @@ class WebsitePageCloneWizard(models.TransientModel):
     publish = fields.Boolean(default=False, string="Publicar pagina clonada")
 
     @api.model
+    def _get_context_source_page_id(self):
+        ctx = self.env.context
+        if ctx.get("active_model") != "website.page":
+            return False
+
+        active_ids = [page_id for page_id in (ctx.get("active_ids") or []) if page_id]
+        if len(active_ids) > 1:
+            raise UserError(_(
+                "Debes seleccionar una unica pagina origen para abrir el asistente de clonacion."
+            ))
+        if len(active_ids) == 1:
+            return active_ids[0]
+        return ctx.get("active_id") or False
+
+    @api.model
     def default_get(self, field_list):
         vals = super().default_get(field_list)
-        source_page_id = vals.get("source_page_id")
+        source_page_id = vals.get("source_page_id") or self.env.context.get("default_source_page_id")
         source_website_id = vals.get("source_website_id")
+        context_source_page_id = self._get_context_source_page_id()
+
+        if not source_page_id and context_source_page_id:
+            source_page_id = context_source_page_id
+            vals.setdefault("source_page_id", source_page_id)
 
         if source_page_id:
-            source_page = self.env["website.page"].browse(source_page_id)
+            source_page = self.env["website.page"].sudo().browse(source_page_id).exists()
+            if not source_page:
+                raise UserError(_("La pagina origen seleccionada ya no existe."))
             vals.setdefault("source_website_id", source_page.website_id.id)
             vals.setdefault("new_name", _("%s (Copia)") % source_page.name)
             vals.setdefault("new_url", self._get_unique_url(source_page.url or "/new-page", vals.get("target_website_id") or source_page.website_id.id))
@@ -102,24 +128,40 @@ class WebsitePageCloneWizard(models.TransientModel):
             if wizard.source_mode == "custom":
                 if wizard.source_page_id and wizard.source_page_id.website_id != wizard.source_website_id:
                     wizard.source_page_id = False
-                if not wizard.source_page_id:
-                    fallback_page = self.env["website.page"].sudo().search(
-                        [("website_id", "=", wizard.source_website_id.id)],
-                        order="id",
-                        limit=1,
-                    )
-                    wizard.source_page_id = fallback_page
             else:
                 wizard.source_page_id = False
                 wizard.new_website_name = _("%s (Copia)") % wizard.source_website_id.name
                 if "company_id" in wizard.source_website_id._fields:
                     wizard.new_website_company_id = wizard.source_website_id.company_id
 
+    def _resolve_source_page(self):
+        self.ensure_one()
+        source_page = self.source_page_id.sudo().exists()
+        if not source_page:
+            raise UserError(_("Debes seleccionar una pagina origen valida."))
+        if self.source_website_id and source_page.website_id != self.source_website_id:
+            raise UserError(_(
+                "La pagina seleccionada no pertenece al sitio web donante indicado."
+            ))
+        return source_page
+
+    def _resolve_source_view(self, source_page):
+        self.ensure_one()
+        source_page.ensure_one()
+        source_view = source_page.view_id.sudo().exists()
+        if not source_view:
+            raise UserError(_("La pagina seleccionada no tiene una vista asociada."))
+        if "page_ids" in source_view._fields and source_view.page_ids and source_page not in source_view.page_ids:
+            raise UserError(_(
+                "La vista asociada no corresponde con la pagina seleccionada."
+            ))
+        return source_view
+
     def _resolve_source_website(self):
         self.ensure_one()
         if self.source_mode == "complete":
             return self.source_website_id.sudo()
-        return self.source_page_id.website_id.sudo()
+        return self._resolve_source_page().website_id.sudo()
 
     def _cleanup_new_website_pages(self, target_website):
         page_model = self.env["website.page"].sudo()
@@ -142,7 +184,8 @@ class WebsitePageCloneWizard(models.TransientModel):
             pages.unlink()
 
     def _clone_single_page(self, source_page, target_website, name=None, url=None, publish=None):
-        new_view = self._copy_view(source_page, target_website)
+        source_view = self._resolve_source_view(source_page)
+        new_view = self._copy_view(source_page, target_website, source_view=source_view)
         desired_url = url or source_page.url or "/new-page"
         final_url = self._get_unique_url(desired_url, target_website.id)
 
@@ -158,12 +201,15 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         target_page = self.env["website.page"].sudo().create(page_vals)
 
+        if "page_ids" in new_view._fields:
+            new_view.write({"page_ids": [(6, 0, [target_page.id])]})
+
         if self.copy_seo:
             self._apply_seo_values(source_page, target_page)
         if self.copy_menu:
             self._copy_menus(source_page, target_page, target_website)
         if self.copy_translations:
-            self._copy_translations(source_page, target_page, source_page.view_id, new_view)
+            self._copy_translations(source_page, target_page, source_view, new_view)
 
         return target_page
 
@@ -237,8 +283,8 @@ class WebsitePageCloneWizard(models.TransientModel):
             key = "%s.clone_%s_%s" % (root_key, website_id, index)
         return key
 
-    def _copy_view(self, source_page, target_website):
-        source_view = source_page.view_id
+    def _copy_view(self, source_page, target_website, source_view=None):
+        source_view = (source_view or source_page.view_id).sudo().exists()
         if not source_view:
             raise UserError(_("La pagina seleccionada no tiene una vista asociada."))
 
@@ -248,6 +294,8 @@ class WebsitePageCloneWizard(models.TransientModel):
         }
         if "website_id" in source_view._fields:
             defaults["website_id"] = target_website.id
+        if "page_ids" in source_view._fields:
+            defaults["page_ids"] = [(5, 0, 0)]
 
         return source_view.copy(default=defaults)
 
@@ -337,6 +385,152 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _copy_translations(self, source_page, target_page, source_view, target_view):
         self._copy_model_translations(source_page, target_page)
         self._copy_translated_field_values(source_view, target_view, "arch_db")
+
+    def _website_setting_blacklist(self):
+        return {
+            "id",
+            "name",
+            "domain",
+            "company_id",
+            "homepage_url",
+            "menu_id",
+            "home_menu_id",
+            "homepage_menu_id",
+            "default_lang_code",
+            "create_uid",
+            "create_date",
+            "write_uid",
+            "write_date",
+            "__last_update",
+        }
+
+    def _copy_website_settings(self, source_website, target_website):
+        vals = {}
+        blacklist = self._website_setting_blacklist()
+        for field_name, target_field in target_website._fields.items():
+            source_field = source_website._fields.get(field_name)
+            if not source_field or field_name in blacklist:
+                continue
+            if getattr(target_field, "readonly", False) or getattr(target_field, "compute", False):
+                continue
+            if getattr(target_field, "related", False):
+                continue
+            if target_field.type in ("one2many", "binary"):
+                continue
+            if target_field.type == "many2one":
+                vals[field_name] = source_website[field_name].id or False
+            elif target_field.type == "many2many":
+                vals[field_name] = [(6, 0, source_website[field_name].ids)]
+            else:
+                vals[field_name] = source_website[field_name]
+        if vals:
+            target_website.sudo().write(vals)
+
+    def _collect_website_custom_views(self, source_website, include_shop=True):
+        view_model = self.env["ir.ui.view"].sudo()
+        domain = [("website_id", "=", source_website.id)]
+        if "type" in view_model._fields:
+            domain.append(("type", "=", "qweb"))
+
+        source_views = view_model.search(domain, order="inherit_id,id")
+        custom_views = view_model.browse()
+        for view in source_views:
+            if "page_ids" in view._fields and view.page_ids:
+                continue
+            if not include_shop and self._is_shop_related_view(view):
+                continue
+            custom_views |= view
+        return custom_views
+
+    def _cleanup_target_website_views(self, target_website, include_shop=True):
+        target_views = self._collect_website_custom_views(target_website, include_shop=include_shop)
+        if target_views:
+            target_views.unlink()
+
+    def _clone_website_custom_views(self, source_website, target_website, include_shop=True):
+        source_views = self._collect_website_custom_views(source_website, include_shop=include_shop)
+        if not source_views:
+            return
+
+        source_ids = set(source_views.ids)
+
+        def _depth(view):
+            depth = 0
+            parent = view.inherit_id
+            while parent and parent.id in source_ids:
+                depth += 1
+                parent = parent.inherit_id
+            return depth
+
+        ordered_source_views = sorted(source_views, key=lambda view: (_depth(view), view.id))
+        view_map = {}
+
+        for source_view in ordered_source_views:
+            defaults = {
+                "website_id": target_website.id,
+                "key": source_view.key,
+            }
+            if "page_ids" in source_view._fields:
+                defaults["page_ids"] = [(5, 0, 0)]
+            target_view = source_view.copy(default=defaults)
+            view_map[source_view.id] = target_view
+
+            if self.copy_translations and source_view.arch_db:
+                self._copy_translated_field_values(source_view, target_view, "arch_db")
+
+        for source_view in ordered_source_views:
+            target_view = view_map[source_view.id]
+            inherit_view = source_view.inherit_id
+            if inherit_view and inherit_view.id in view_map:
+                inherit_view = view_map[inherit_view.id]
+            if inherit_view:
+                target_view.write({"inherit_id": inherit_view.id})
+
+    def _cleanup_target_website_menus(self, target_website):
+        self.env["website.menu"].sudo().search([
+            ("website_id", "=", target_website.id),
+        ]).unlink()
+
+    def _clone_complete_menu_tree(self, source_website, target_website, page_map):
+        menu_model = self.env["website.menu"].sudo()
+        source_menus = menu_model.search(
+            [("website_id", "=", source_website.id)],
+            order="parent_id,sequence,id",
+        )
+        menu_map = {}
+
+        for source_menu in source_menus:
+            parent_menu = menu_map.get(source_menu.parent_id.id)
+            vals = {
+                "name": source_menu.name,
+                "website_id": target_website.id,
+                "sequence": source_menu.sequence,
+                "parent_id": parent_menu.id if parent_menu else False,
+                "url": source_menu.url,
+            }
+            if source_menu.page_id:
+                target_page = page_map.get(source_menu.page_id.id)
+                vals["page_id"] = target_page.id if target_page else False
+            if "new_window" in source_menu._fields:
+                vals["new_window"] = source_menu.new_window
+            if "is_visible" in source_menu._fields:
+                vals["is_visible"] = source_menu.is_visible
+            menu_map[source_menu.id] = menu_model.create(vals)
+
+    def _clone_complete_pages(self, source_website, target_website):
+        source_pages = self.env["website.page"].sudo().search(
+            [("website_id", "=", source_website.id)],
+            order="id",
+        )
+        if not source_pages:
+            raise UserError(_("El sitio web donante seleccionado no tiene paginas para clonar."))
+
+        page_map = {}
+        target_page = self.env["website.page"]
+        for source_page in source_pages:
+            target_page = self._clone_single_page(source_page, target_website)
+            page_map[source_page.id] = target_page
+        return target_page, page_map
 
     def _shop_setting_fields(self):
         """Website fields cloned when `copy_shop_settings` is enabled.
@@ -747,6 +941,16 @@ class WebsitePageCloneWizard(models.TransientModel):
     def action_clone_page(self):
         self.ensure_one()
 
+        _logger.info(
+            "Clone request: source_mode=%s source_page_id=%s source_website_id=%s target_mode=%s target_website_id=%s active_ids=%s",
+            self.source_mode,
+            self.source_page_id.id,
+            self.source_website_id.id,
+            self.target_mode,
+            self.target_website_id.id,
+            self.env.context.get("active_ids"),
+        )
+
         if self.source_mode == "custom" and not self.source_page_id:
             raise UserError(_("La pagina origen es obligatoria en modo custom."))
         if self.source_mode == "complete" and not self.source_website_id:
@@ -770,16 +974,17 @@ class WebsitePageCloneWizard(models.TransientModel):
             self._cleanup_new_website_home(target_website)
 
         if self.source_mode == "complete":
-            source_pages = self.env["website.page"].sudo().search([("website_id", "=", source_website.id)], order="id")
-            if not source_pages:
-                raise UserError(_("El sitio web donante seleccionado no tiene paginas para clonar."))
+            if self.target_mode == "new":
+                self._cleanup_target_website_views(target_website, include_shop=self.copy_shop)
+                self._cleanup_target_website_menus(target_website)
 
-            target_page = self.env["website.page"]
-            for source_page in source_pages:
-                target_page = self._clone_single_page(source_page, target_website)
+            self._copy_website_settings(source_website, target_website)
+            target_page, page_map = self._clone_complete_pages(source_website, target_website)
+            self._clone_complete_menu_tree(source_website, target_website, page_map)
+            self._clone_website_custom_views(source_website, target_website, include_shop=self.copy_shop)
         else:
             target_page = self._clone_single_page(
-                self.source_page_id.sudo(),
+                self._resolve_source_page(),
                 target_website,
                 name=self.new_name or _("%s (Copia)") % self.source_page_id.name,
                 url=self.new_url or self.source_page_id.url,
