@@ -1100,11 +1100,19 @@ class WebsitePageCloneWizard(models.TransientModel):
         has_website_ids = "website_ids" in template_model._fields
         has_website_id = "website_id" in template_model._fields
         if has_website_ids and has_website_id:
-            domain += ["|", ("website_ids", "in", source_website.id), ("website_id", "=", source_website.id)]
+            domain += [
+                "|",
+                "|",
+                ("website_ids", "in", source_website.id),
+                ("website_id", "=", source_website.id),
+                "&",
+                ("website_ids", "=", False),
+                ("website_id", "=", False),
+            ]
         elif has_website_ids:
-            domain += [("website_ids", "in", source_website.id)]
+            domain += ["|", ("website_ids", "in", source_website.id), ("website_ids", "=", False)]
         elif has_website_id:
-            domain += [("website_id", "=", source_website.id)]
+            domain += ["|", ("website_id", "=", source_website.id), ("website_id", "=", False)]
 
         return template_model.search(domain, order="id")
 
