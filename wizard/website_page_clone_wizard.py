@@ -1,11 +1,7 @@
 import re
-import logging
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
-
-
-_logger = logging.getLogger(__name__)
 
 
 class WebsitePageCloneWizard(models.TransientModel):
@@ -43,48 +39,14 @@ class WebsitePageCloneWizard(models.TransientModel):
     copy_shop_products = fields.Boolean(default=True, string="Clonar productos de tienda")
     publish = fields.Boolean(default=False, string="Publicar pagina clonada")
 
-    @api.constrains("source_mode", "source_page_id", "source_website_id")
-    def _check_source_page_consistency(self):
-        for wizard in self:
-            if wizard.source_mode != "custom":
-                continue
-            if not wizard.source_page_id:
-                raise UserError(_("Debes seleccionar una pagina origen valida."))
-            if wizard.source_website_id and wizard.source_page_id.website_id != wizard.source_website_id:
-                raise UserError(_(
-                    "La pagina seleccionada no pertenece al sitio web donante indicado."
-                ))
-
-    @api.model
-    def _get_context_source_page_id(self):
-        ctx = self.env.context
-        if ctx.get("active_model") != "website.page":
-            return False
-
-        active_ids = [page_id for page_id in (ctx.get("active_ids") or []) if page_id]
-        if len(active_ids) > 1:
-            raise UserError(_(
-                "Debes seleccionar una unica pagina origen para abrir el asistente de clonacion."
-            ))
-        if len(active_ids) == 1:
-            return active_ids[0]
-        return ctx.get("active_id") or False
-
     @api.model
     def default_get(self, field_list):
         vals = super().default_get(field_list)
-        source_page_id = vals.get("source_page_id") or self.env.context.get("default_source_page_id")
+        source_page_id = vals.get("source_page_id")
         source_website_id = vals.get("source_website_id")
-        context_source_page_id = self._get_context_source_page_id()
-
-        if not source_page_id and context_source_page_id:
-            source_page_id = context_source_page_id
-            vals.setdefault("source_page_id", source_page_id)
 
         if source_page_id:
-            source_page = self.env["website.page"].sudo().browse(source_page_id).exists()
-            if not source_page:
-                raise UserError(_("La pagina origen seleccionada ya no existe."))
+            source_page = self.env["website.page"].browse(source_page_id)
             vals.setdefault("source_website_id", source_page.website_id.id)
             vals.setdefault("new_name", _("%s (Copia)") % source_page.name)
             vals.setdefault("new_url", self._get_unique_url(source_page.url or "/new-page", vals.get("target_website_id") or source_page.website_id.id))
@@ -105,14 +67,6 @@ class WebsitePageCloneWizard(models.TransientModel):
                 continue
             if wizard.source_mode == "custom":
                 wizard.source_website_id = wizard.source_page_id.website_id
-            _logger.debug(
-                "Website clone wizard source page selected: wizard=%s page_id=%s page_url=%s website_id=%s target_website_id=%s",
-                wizard.id,
-                wizard.source_page_id.id,
-                wizard.source_page_id.url,
-                wizard.source_page_id.website_id.id,
-                wizard.target_website_id.id,
-            )
             wizard.new_name = wizard.new_name or _("%s (Copia)") % wizard.source_page_id.name
             wizard.new_website_name = wizard.new_website_name or _("%s (Copia)") % wizard.source_page_id.website_id.name
             if "company_id" in wizard.source_page_id.website_id._fields and not wizard.new_website_company_id:
@@ -148,71 +102,24 @@ class WebsitePageCloneWizard(models.TransientModel):
             if wizard.source_mode == "custom":
                 if wizard.source_page_id and wizard.source_page_id.website_id != wizard.source_website_id:
                     wizard.source_page_id = False
-                if wizard.source_page_id:
-                    wizard.new_name = wizard.new_name or _("%s (Copia)") % wizard.source_page_id.name
-                    wizard.new_url = wizard.new_url or wizard._get_unique_url(
-                        wizard.source_page_id.url or "/new-page",
-                        wizard.target_website_id.id or wizard.source_website_id.id,
+                if not wizard.source_page_id:
+                    fallback_page = self.env["website.page"].sudo().search(
+                        [("website_id", "=", wizard.source_website_id.id)],
+                        order="id",
+                        limit=1,
                     )
+                    wizard.source_page_id = fallback_page
             else:
                 wizard.source_page_id = False
                 wizard.new_website_name = _("%s (Copia)") % wizard.source_website_id.name
                 if "company_id" in wizard.source_website_id._fields:
                     wizard.new_website_company_id = wizard.source_website_id.company_id
 
-    def _resolve_source_page(self):
-        self.ensure_one()
-        selected_page_id = self.source_page_id.id
-        _logger.info(
-            "Resolving source page from wizard: wizard_id=%s selected_page_id=%s context_default_source_page_id=%s active_model=%s active_id=%s source_website_id=%s",
-            self.id,
-            selected_page_id,
-            self.env.context.get("default_source_page_id"),
-            self.env.context.get("active_model"),
-            self.env.context.get("active_id"),
-            self.source_website_id.id,
-        )
-
-        source_page = self.env["website.page"].sudo().browse(selected_page_id).exists()
-        if not source_page:
-            raise UserError(_("Debes seleccionar una pagina origen valida."))
-
-        if self.source_website_id and source_page.website_id != self.source_website_id:
-            raise UserError(_(
-                "La pagina seleccionada no pertenece al sitio web donante indicado."
-            ))
-
-        self._resolve_source_view(source_page)
-        return source_page
-
-    def _resolve_source_view(self, source_page):
-        self.ensure_one()
-        source_page.ensure_one()
-        source_view = source_page.view_id.sudo().exists()
-        if not source_view:
-            raise UserError(_("La pagina origen seleccionada no tiene una vista asociada."))
-
-        if "page_ids" in source_view._fields and source_view.page_ids and source_page not in source_view.page_ids:
-            raise UserError(_(
-                "La vista asociada no corresponde con la pagina seleccionada. Revisa la configuracion de la pagina origen."
-            ))
-
-        _logger.info(
-            "Resolved source page/view: page_id=%s page_url=%s website_id=%s homepage=%s view_id=%s view_key=%s",
-            source_page.id,
-            source_page.url,
-            source_page.website_id.id,
-            bool(getattr(source_page, "is_homepage", False) or source_page.url == "/"),
-            source_view.id,
-            source_view.key,
-        )
-        return source_view
-
     def _resolve_source_website(self):
         self.ensure_one()
         if self.source_mode == "complete":
             return self.source_website_id.sudo()
-        return self._resolve_source_page().website_id.sudo()
+        return self.source_page_id.website_id.sudo()
 
     def _cleanup_new_website_pages(self, target_website):
         page_model = self.env["website.page"].sudo()
@@ -235,8 +142,7 @@ class WebsitePageCloneWizard(models.TransientModel):
             pages.unlink()
 
     def _clone_single_page(self, source_page, target_website, name=None, url=None, publish=None):
-        source_view = self._resolve_source_view(source_page)
-        new_view = self._copy_view(source_page, target_website, source_view=source_view)
+        new_view = self._copy_view(source_page, target_website)
         desired_url = url or source_page.url or "/new-page"
         final_url = self._get_unique_url(desired_url, target_website.id)
 
@@ -252,15 +158,12 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         target_page = self.env["website.page"].sudo().create(page_vals)
 
-        if "page_ids" in new_view._fields:
-            new_view.write({"page_ids": [(6, 0, [target_page.id])]})
-
         if self.copy_seo:
             self._apply_seo_values(source_page, target_page)
         if self.copy_menu:
             self._copy_menus(source_page, target_page, target_website)
         if self.copy_translations:
-            self._copy_translations(source_page, target_page, source_view, new_view)
+            self._copy_translations(source_page, target_page, source_page.view_id, new_view)
 
         return target_page
 
@@ -334,8 +237,8 @@ class WebsitePageCloneWizard(models.TransientModel):
             key = "%s.clone_%s_%s" % (root_key, website_id, index)
         return key
 
-    def _copy_view(self, source_page, target_website, source_view=None):
-        source_view = (source_view or source_page.view_id).sudo().exists()
+    def _copy_view(self, source_page, target_website):
+        source_view = source_page.view_id
         if not source_view:
             raise UserError(_("La pagina seleccionada no tiene una vista asociada."))
 
@@ -345,8 +248,6 @@ class WebsitePageCloneWizard(models.TransientModel):
         }
         if "website_id" in source_view._fields:
             defaults["website_id"] = target_website.id
-        if "page_ids" in source_view._fields:
-            defaults["page_ids"] = [(5, 0, 0)]
 
         return source_view.copy(default=defaults)
 
@@ -846,32 +747,10 @@ class WebsitePageCloneWizard(models.TransientModel):
     def action_clone_page(self):
         self.ensure_one()
 
-        _logger.info(
-            "Clone request received: wizard_id=%s source_mode=%s source_page_id=%s context_default_source_page_id=%s active_model=%s active_id=%s source_website_id=%s target_mode=%s target_website_id=%s",
-            self.id,
-            self.source_mode,
-            self.source_page_id.id,
-            self.env.context.get("default_source_page_id"),
-            self.env.context.get("active_model"),
-            self.env.context.get("active_id"),
-            self.source_website_id.id,
-            self.target_mode,
-            self.target_website_id.id,
-        )
-        _logger.info(
-            "Clone request active_ids: wizard_id=%s active_ids=%s",
-            self.id,
-            self.env.context.get("active_ids"),
-        )
-
         if self.source_mode == "custom" and not self.source_page_id:
             raise UserError(_("La pagina origen es obligatoria en modo custom."))
         if self.source_mode == "complete" and not self.source_website_id:
             raise UserError(_("El sitio web donante es obligatorio en modo completa."))
-
-        source_page = self.env["website.page"]
-        if self.source_mode == "custom":
-            source_page = self._resolve_source_page()
 
         source_website = self._resolve_source_website()
 
@@ -885,19 +764,9 @@ class WebsitePageCloneWizard(models.TransientModel):
         if target_website.id == source_website.id:
             raise UserError(_("El sitio origen y el sitio destino deben ser distintos."))
 
-        _logger.info(
-            "Starting website clone: mode=%s source_page_id=%s source_page_url=%s source_website_id=%s target_mode=%s target_website_id=%s",
-            self.source_mode,
-            source_page.id if source_page else False,
-            source_page.url if source_page else False,
-            source_website.id,
-            self.target_mode,
-            target_website.id,
-        )
-
         if self.target_mode == "new" and self.source_mode == "complete":
             self._cleanup_new_website_pages(target_website)
-        elif self.target_mode == "new" and self.source_mode == "custom" and source_page.url == "/":
+        elif self.target_mode == "new" and self.source_mode == "custom" and self.source_page_id.url == "/":
             self._cleanup_new_website_home(target_website)
 
         if self.source_mode == "complete":
@@ -910,19 +779,12 @@ class WebsitePageCloneWizard(models.TransientModel):
                 target_page = self._clone_single_page(source_page, target_website)
         else:
             target_page = self._clone_single_page(
-                source_page,
+                self.source_page_id.sudo(),
                 target_website,
-                name=self.new_name or _("%s (Copia)") % source_page.name,
-                url=self.new_url or source_page.url,
+                name=self.new_name or _("%s (Copia)") % self.source_page_id.name,
+                url=self.new_url or self.source_page_id.url,
                 publish=self.publish,
             )
-
-        _logger.info(
-            "Website clone completed: target_page_id=%s target_page_url=%s target_website_id=%s",
-            target_page.id,
-            target_page.url,
-            target_website.id,
-        )
 
         if self.copy_shop:
             self._clone_shop_data(source_website, target_website)
