@@ -804,6 +804,7 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _shop_toggle_view_keys(self):
         """Editor toggle views that must mirror *effective* active state."""
         return (
+            "website_sale.header_hide_empty_cart_link",
             "website_sale.search",
             "website_sale.sort",
             "website_sale.add_grid_or_list_option",
