@@ -433,35 +433,32 @@ class WebsitePageCloneWizard(models.TransientModel):
         self._copy_model_translations(source_page, target_page)
         self._copy_translated_field_values(source_view, target_view, "arch_db")
 
-    def _website_setting_blacklist(self):
-        return {
-            "id",
-            "name",
-            "domain",
-            "company_id",
-            "homepage_url",
-            "menu_id",
-            "home_menu_id",
-            "homepage_menu_id",
-            "create_uid",
-            "create_date",
-            "write_uid",
-            "write_date",
-            "__last_update",
-        }
+    def _website_setting_fields(self):
+        return [
+            "language_ids",
+            "default_lang_id",
+            "social_facebook",
+            "social_twitter",
+            "social_linkedin",
+            "social_youtube",
+            "social_instagram",
+            "contact_us_button_url",
+            "google_analytics_key",
+            "plausible_shared_key",
+        ]
 
     def _copy_website_settings(self, source_website, target_website):
         vals = {}
-        blacklist = self._website_setting_blacklist()
-        for field_name, target_field in target_website._fields.items():
+        for field_name in self._website_setting_fields():
+            target_field = target_website._fields.get(field_name)
             source_field = source_website._fields.get(field_name)
-            if not source_field or field_name in blacklist:
+            if not source_field or not target_field:
                 continue
             if getattr(target_field, "readonly", False) or getattr(target_field, "compute", False):
                 continue
             if getattr(target_field, "related", False):
                 continue
-            if target_field.type == "one2many":
+            if target_field.type in ("one2many", "binary"):
                 continue
             if target_field.type == "many2one":
                 vals[field_name] = source_website[field_name].id or False
@@ -477,6 +474,37 @@ class WebsitePageCloneWizard(models.TransientModel):
             target_website.id,
             len(vals),
         )
+
+    def _collect_source_pages_for_website(self, source_website):
+        page_model = self.env["website.page"].sudo()
+        menu_model = self.env["website.menu"].sudo()
+
+        pages = page_model.search([("website_id", "=", source_website.id)])
+        source_menus = menu_model.search([("website_id", "=", source_website.id)])
+        pages |= source_menus.mapped("page_id")
+
+        shared_urls = [
+            url for url in source_menus.mapped("url")
+            if url and url.startswith("/") and url not in ("/shop", "/shop/cart", "/shop/checkout")
+        ]
+        if shared_urls:
+            pages |= page_model.search([
+                ("website_id", "=", False),
+                ("url", "in", list(set(shared_urls))),
+            ])
+
+        homepage = page_model.search([
+            ("url", "=", "/"),
+            ("website_id", "=", source_website.id),
+        ], limit=1)
+        if not homepage:
+            homepage = page_model.search([
+                ("url", "=", "/"),
+                ("website_id", "=", False),
+            ], limit=1)
+        pages |= homepage
+
+        return pages.sorted(key=lambda page: page.id)
 
     def _clone_website_rewrites(self, source_website, target_website):
         if "website.rewrite" not in self.env:
@@ -603,18 +631,28 @@ class WebsitePageCloneWizard(models.TransientModel):
             if "is_visible" in source_menu._fields:
                 vals["is_visible"] = source_menu.is_visible
             menu_map[source_menu.id] = menu_model.create(vals)
+
+        website_vals = {}
+        for field_name in ("menu_id", "home_menu_id", "homepage_menu_id"):
+            if field_name not in source_website._fields or field_name not in target_website._fields:
+                continue
+            source_menu = source_website[field_name]
+            target_menu = menu_map.get(source_menu.id)
+            if target_menu:
+                website_vals[field_name] = target_menu.id
+        if website_vals:
+            target_website.sudo().write(website_vals)
+
         _logger.info(
             "Website menus cloned: source_website_id=%s target_website_id=%s count=%s",
             source_website.id,
             target_website.id,
             len(source_menus),
         )
+        return menu_map
 
     def _clone_complete_pages(self, source_website, target_website):
-        source_pages = self.env["website.page"].sudo().search(
-            [("website_id", "=", source_website.id)],
-            order="id",
-        )
+        source_pages = self._collect_source_pages_for_website(source_website)
         if not source_pages:
             raise UserError(_("El sitio web donante seleccionado no tiene paginas para clonar."))
 
@@ -988,6 +1026,14 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         for source_category in self._sort_categories_by_depth(source_categories):
             parent_clone = category_map.get(source_category.parent_id.id)
+            existing_category = self.env["product.public.category"].sudo().search([
+                ("website_id", "=", target_website.id),
+                ("name", "=", source_category.name),
+                ("parent_id", "=", parent_clone.id if parent_clone else False),
+            ], limit=1)
+            if existing_category:
+                category_map[source_category.id] = existing_category
+                continue
             defaults = {
                 "name": source_category.name,
                 "parent_id": parent_clone.id if parent_clone else False,
@@ -1015,12 +1061,10 @@ class WebsitePageCloneWizard(models.TransientModel):
             if "website_ids" in source_product._fields:
                 defaults["website_ids"] = [(6, 0, [target_website.id])]
             if "public_categ_ids" in source_product._fields:
-                if category_map:
-                    defaults["public_categ_ids"] = [
-                        (6, 0, [category_map[cid].id for cid in source_product.public_categ_ids.ids if cid in category_map])
-                    ]
-                else:
-                    defaults["public_categ_ids"] = [(6, 0, source_product.public_categ_ids.ids)]
+                mapped_categ_ids = [
+                    category_map[cid].id for cid in source_product.public_categ_ids.ids if cid in category_map
+                ]
+                defaults["public_categ_ids"] = [(6, 0, mapped_categ_ids)]
             if "website_published" in source_product._fields:
                 defaults["website_published"] = source_product.website_published
             if "is_published" in source_product._fields:
