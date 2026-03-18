@@ -485,7 +485,7 @@ class WebsitePageCloneWizard(models.TransientModel):
 
             source_url = source_page.url if source_page else False
             target_url = target_page.url if hasattr(target_page, "url") else False
-            if source_url and target_url:
+            if source_url and target_url and source_url not in url_map:
                 url_map[source_url] = target_url
         return url_map
 
@@ -554,20 +554,51 @@ class WebsitePageCloneWizard(models.TransientModel):
             len(vals),
         )
 
+    def _page_priority_key(self, page, source_website_id):
+        return (
+            0 if page.website_id.id == source_website_id else 1,
+            0 if page.website_id else 1,
+            page.id,
+        )
+
+    def _select_effective_pages(self, pages, source_website):
+        effective_pages = self.env["website.page"].sudo().browse()
+        pages_by_url = {}
+
+        for page in pages:
+            if page.website_id and page.website_id.id != source_website.id:
+                continue
+            pages_by_url.setdefault(page.url or False, self.env["website.page"].sudo().browse())
+            pages_by_url[page.url or False] |= page
+
+        for _url, candidates in pages_by_url.items():
+            ordered_candidates = candidates.sorted(
+                key=lambda page: self._page_priority_key(page, source_website.id)
+            )
+            if ordered_candidates:
+                effective_pages |= ordered_candidates[:1]
+
+        return effective_pages.sorted(key=lambda page: page.id)
+
     def _collect_source_pages_for_website(self, source_website):
         page_model = self.env["website.page"].sudo()
         menu_model = self.env["website.menu"].sudo()
 
         pages = page_model.search([("website_id", "=", source_website.id)])
         source_menus = menu_model.search([("website_id", "=", source_website.id)])
-        pages |= source_menus.mapped("page_id")
+        pages |= source_menus.mapped("page_id").filtered(
+            lambda page: not page.website_id or page.website_id.id == source_website.id
+        )
 
         shared_urls = [
             url for url in source_menus.mapped("url")
             if url and url.startswith("/") and url not in ("/shop", "/shop/cart", "/shop/checkout")
         ]
         if shared_urls:
-            pages |= page_model.search([("url", "in", list(set(shared_urls)))])
+            pages |= page_model.search([
+                ("url", "in", list(set(shared_urls))),
+                ("website_id", "in", [False, source_website.id]),
+            ])
 
         homepage = page_model.search([
             ("url", "=", "/"),
@@ -584,9 +615,17 @@ class WebsitePageCloneWizard(models.TransientModel):
             ("website_id", "=", source_website.id),
             ("page_ids", "!=", False),
         ])
-        pages |= source_page_views.mapped("page_ids")
+        pages |= source_page_views.mapped("page_ids").filtered(
+            lambda page: not page.website_id or page.website_id.id == source_website.id
+        )
 
-        return pages.sorted(key=lambda page: page.id)
+        effective_pages = self._select_effective_pages(pages, source_website)
+        _logger.info(
+            "Effective source pages resolved: website_id=%s pages=%s",
+            source_website.id,
+            [(page.id, page.url, page.website_id.id if page.website_id else False) for page in effective_pages],
+        )
+        return effective_pages
 
     def _clone_website_rewrites(self, source_website, target_website, page_map=None):
         if "website.rewrite" not in self.env:
