@@ -1,5 +1,6 @@
 import logging
 import re
+from urllib.parse import urlsplit, urlunsplit
 
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
@@ -474,6 +475,41 @@ class WebsitePageCloneWizard(models.TransientModel):
         self._copy_model_translations(source_page, target_page)
         self._copy_translated_field_values(source_view, target_view, "arch_db")
 
+    def _build_page_url_map(self, page_map):
+        url_map = {}
+        page_model = self.env["website.page"].sudo()
+        for source_page_ref, target_page in page_map.items():
+            source_page = source_page_ref
+            if isinstance(source_page_ref, int):
+                source_page = page_model.browse(source_page_ref).exists()
+
+            source_url = source_page.url if source_page else False
+            target_url = target_page.url if hasattr(target_page, "url") else False
+            if source_url and target_url:
+                url_map[source_url] = target_url
+        return url_map
+
+    def _remap_internal_url(self, url, url_map):
+        if not url or not url_map:
+            return url
+
+        split_url = urlsplit(url)
+        source_path = split_url.path or ""
+        if not source_path.startswith("/"):
+            return url
+
+        target_path = url_map.get(source_path)
+        if not target_path:
+            return url
+
+        return urlunsplit((
+            split_url.scheme,
+            split_url.netloc,
+            target_path,
+            split_url.query,
+            split_url.fragment,
+        ))
+
     def _website_setting_fields(self):
         return [
             "language_ids",
@@ -488,7 +524,7 @@ class WebsitePageCloneWizard(models.TransientModel):
             "plausible_shared_key",
         ]
 
-    def _copy_website_settings(self, source_website, target_website):
+    def _copy_website_settings(self, source_website, target_website, url_map=None):
         vals = {}
         for field_name in self._website_setting_fields():
             target_field = target_website._fields.get(field_name)
@@ -507,6 +543,8 @@ class WebsitePageCloneWizard(models.TransientModel):
                 vals[field_name] = [(6, 0, source_website[field_name].ids)]
             else:
                 vals[field_name] = source_website[field_name]
+                if field_name == "contact_us_button_url":
+                    vals[field_name] = self._remap_internal_url(vals[field_name], url_map)
         if vals:
             target_website.sudo().write(vals)
         _logger.info(
@@ -550,25 +588,28 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         return pages.sorted(key=lambda page: page.id)
 
-    def _clone_website_rewrites(self, source_website, target_website):
+    def _clone_website_rewrites(self, source_website, target_website, page_map=None):
         if "website.rewrite" not in self.env:
             return
 
         rewrite_model = self.env["website.rewrite"].sudo()
         source_rewrites = rewrite_model.search([("website_id", "=", source_website.id)])
+        url_map = self._build_page_url_map(page_map or {})
         cloned = 0
         for source_rewrite in source_rewrites:
             defaults = {"website_id": target_website.id}
+            target_url_to = self._remap_internal_url(source_rewrite.url_to, url_map)
             duplicate = rewrite_model.search([
                 ("website_id", "=", target_website.id),
                 ("url_from", "=", source_rewrite.url_from),
             ], limit=1)
             if duplicate:
                 duplicate.write({
-                    "url_to": source_rewrite.url_to,
+                    "url_to": target_url_to,
                     "redirect_type": source_rewrite.redirect_type,
                 })
             else:
+                defaults["url_to"] = target_url_to
                 source_rewrite.copy(default=defaults)
             cloned += 1
         _logger.info(
@@ -671,6 +712,7 @@ class WebsitePageCloneWizard(models.TransientModel):
         menu_model = self.env["website.menu"].sudo()
         source_menus = self._collect_source_menus_for_website(source_website)
         menu_map = {}
+        url_map = self._build_page_url_map(page_map)
 
         for source_menu in source_menus:
             parent_menu = menu_map.get(source_menu.parent_id.id)
@@ -679,7 +721,7 @@ class WebsitePageCloneWizard(models.TransientModel):
                 "website_id": target_website.id,
                 "sequence": source_menu.sequence,
                 "parent_id": parent_menu.id if parent_menu else False,
-                "url": source_menu.url,
+                "url": self._remap_internal_url(source_menu.url, url_map),
             }
             if source_menu.page_id:
                 target_page = page_map.get(source_menu.page_id.id)
@@ -794,7 +836,7 @@ class WebsitePageCloneWizard(models.TransientModel):
             return False
         return value
 
-    def _copy_shop_settings(self, source_website, target_website, pricelist_map=None):
+    def _copy_shop_settings(self, source_website, target_website, pricelist_map=None, url_map=None):
         pricelist_map = pricelist_map or {}
         vals = {}
         for field_name in self._shop_setting_fields():
@@ -820,6 +862,8 @@ class WebsitePageCloneWizard(models.TransientModel):
             prepared = self._prepare_write_value(target_field, source_website[field_name])
             if prepared is False and target_field.type in ("one2many", "binary"):
                 continue
+            if field_name == "contact_us_button_url":
+                prepared = self._remap_internal_url(prepared, url_map)
             vals[field_name] = prepared
         if vals:
             target_website.sudo().write(vals)
@@ -1511,10 +1555,11 @@ class WebsitePageCloneWizard(models.TransientModel):
         )
         return product_map
 
-    def _clone_shop_data(self, source_website, target_website):
+    def _clone_shop_data(self, source_website, target_website, page_map=None):
         source_products = self._get_source_shop_products(source_website)
         category_map = {}
         pricelist_map = {}
+        url_map = self._build_page_url_map(page_map or {})
 
         _logger.info(
             "Starting shop clone: source_website_id=%s target_website_id=%s source_products=%s copy_shop_settings=%s copy_shop_pricelists=%s copy_shop_categories=%s copy_shop_products=%s",
@@ -1531,7 +1576,7 @@ class WebsitePageCloneWizard(models.TransientModel):
             pricelist_map = self._clone_shop_pricelists(source_website, target_website)
 
         if self.copy_shop_settings:
-            self._copy_shop_settings(source_website, target_website, pricelist_map)
+            self._copy_shop_settings(source_website, target_website, pricelist_map, url_map=url_map)
             self._clone_shop_custom_views(source_website, target_website)
             self._sync_shop_header_bridge_views(source_website, target_website)
             self._sync_shop_toggle_views(source_website, target_website)
@@ -1600,22 +1645,28 @@ class WebsitePageCloneWizard(models.TransientModel):
                 self._cleanup_target_website_views(target_website, include_shop=self.copy_shop)
                 self._cleanup_target_website_menus(target_website)
 
-            self._copy_website_settings(source_website, target_website)
             target_page, page_map = self._clone_complete_pages(source_website, target_website)
             self._clone_complete_menu_tree(source_website, target_website, page_map)
+            self._copy_website_settings(
+                source_website,
+                target_website,
+                url_map=self._build_page_url_map(page_map),
+            )
             self._clone_website_custom_views(source_website, target_website, include_shop=self.copy_shop)
-            self._clone_website_rewrites(source_website, target_website)
+            self._clone_website_rewrites(source_website, target_website, page_map=page_map)
         else:
+            source_page = self._resolve_source_page()
             target_page = self._clone_single_page(
-                self._resolve_source_page(),
+                source_page,
                 target_website,
                 name=self.new_name or _("%s (Copia)") % self.source_page_id.name,
                 url=self.new_url or self.source_page_id.url,
                 publish=self.publish,
             )
+            page_map = {source_page.id: target_page}
 
         if self.copy_shop:
-            self._clone_shop_data(source_website, target_website)
+            self._clone_shop_data(source_website, target_website, page_map=page_map)
 
         if self.source_mode == "complete":
             return {
