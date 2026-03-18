@@ -910,6 +910,9 @@ class WebsitePageCloneWizard(models.TransientModel):
     def _shop_view_key_prefixes(self):
         return ("website_sale.", "website_payment.", "payment.")
 
+    def _is_shop_page(self, page):
+        return bool(page and page.url and page.url.startswith("/shop"))
+
     def _shop_toggle_view_keys(self):
         """Editor toggle views that must mirror *effective* active state."""
         return (
@@ -974,14 +977,16 @@ class WebsitePageCloneWizard(models.TransientModel):
 
     def _collect_shop_custom_views(self, source_website):
         view_model = self.env["ir.ui.view"].sudo()
-        domain = [("website_id", "=", source_website.id)]
+        domain = [("website_id", "in", [False, source_website.id])]
         if "type" in view_model._fields:
             domain.append(("type", "=", "qweb"))
 
         source_views = view_model.search(domain, order="inherit_id,id")
         shop_views = view_model.browse()
         for view in source_views:
-            if "page_ids" in view._fields and view.page_ids:
+            if "page_ids" in view._fields and view.page_ids and not any(
+                self._is_shop_page(page) for page in view.page_ids
+            ):
                 continue
             if not self._is_shop_related_view(view):
                 continue
