@@ -12,6 +12,14 @@ class WebsitePageCloneWizard(models.TransientModel):
     _name = "website.page.clone.wizard"
     _description = "Asistente de clonado de paginas web"
 
+    COMPLETE_MODE_FIELD_DEFAULTS = {
+        "copy_shop": True,
+        "copy_shop_settings": True,
+        "copy_shop_pricelists": True,
+        "copy_shop_categories": True,
+        "copy_shop_products": True,
+    }
+
     source_mode = fields.Selection(
         [("custom", "Custom"), ("complete", "Completa")],
         default="custom",
@@ -73,6 +81,41 @@ class WebsitePageCloneWizard(models.TransientModel):
             return active_ids[0]
         return ctx.get("active_id") or False
 
+    @classmethod
+    def _get_complete_mode_defaults(cls):
+        return dict(cls.COMPLETE_MODE_FIELD_DEFAULTS)
+
+    def _set_new_website_defaults_from_website(self, website, values=None, only_missing=False):
+        if not website:
+            return values if values is not None else {}
+
+        defaults = {
+            "new_website_name": _("%s (Copia)") % website.name,
+        }
+        if "company_id" in website._fields:
+            defaults["new_website_company_id"] = website.company_id.id
+
+        if values is None:
+            for field_name, field_value in defaults.items():
+                if not only_missing or not self[field_name]:
+                    self[field_name] = field_value
+            return defaults
+
+        for field_name, field_value in defaults.items():
+            if not only_missing or not values.get(field_name):
+                values.setdefault(field_name, field_value)
+        return values
+
+    def _set_complete_mode_defaults(self):
+        self.ensure_one()
+        self.update({
+            "target_mode": "new",
+            "target_website_id": False,
+            "new_name": False,
+            "new_url": False,
+            **self._get_complete_mode_defaults(),
+        })
+
     @api.model
     def default_get(self, field_list):
         vals = super().default_get(field_list)
@@ -85,11 +128,8 @@ class WebsitePageCloneWizard(models.TransientModel):
             source_website_id = context_source_website_id
             vals.setdefault("source_website_id", source_website_id)
             vals.setdefault("source_mode", "complete")
-            vals.setdefault("copy_shop", True)
-            vals.setdefault("copy_shop_settings", True)
-            vals.setdefault("copy_shop_pricelists", True)
-            vals.setdefault("copy_shop_categories", True)
-            vals.setdefault("copy_shop_products", True)
+            for field_name, default_value in self._get_complete_mode_defaults().items():
+                vals.setdefault(field_name, default_value)
 
         if vals.get("source_mode") == "complete":
             vals["source_page_id"] = False
@@ -110,9 +150,7 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         source_website = self.env["website"].browse(vals.get("source_website_id") or source_website_id)
         if source_website:
-            vals.setdefault("new_website_name", _("%s (Copia)") % source_website.name)
-            if "company_id" in source_website._fields:
-                vals.setdefault("new_website_company_id", source_website.company_id.id)
+            self._set_new_website_defaults_from_website(source_website, values=vals, only_missing=True)
         return vals
 
     @api.onchange("source_page_id", "target_website_id")
@@ -137,19 +175,9 @@ class WebsitePageCloneWizard(models.TransientModel):
                 if wizard.source_page_id and not wizard.source_website_id:
                     wizard.source_website_id = wizard.source_page_id.website_id
                 wizard.source_page_id = False
-                wizard.target_mode = "new"
-                wizard.target_website_id = False
-                wizard.new_name = False
-                wizard.new_url = False
-                wizard.copy_shop = True
-                wizard.copy_shop_settings = True
-                wizard.copy_shop_pricelists = True
-                wizard.copy_shop_categories = True
-                wizard.copy_shop_products = True
+                wizard._set_complete_mode_defaults()
                 if wizard.source_website_id:
-                    wizard.new_website_name = _("%s (Copia)") % wizard.source_website_id.name
-                    if "company_id" in wizard.source_website_id._fields:
-                        wizard.new_website_company_id = wizard.source_website_id.company_id
+                    wizard._set_new_website_defaults_from_website(wizard.source_website_id)
                 continue
 
             if wizard.source_page_id:
@@ -166,9 +194,7 @@ class WebsitePageCloneWizard(models.TransientModel):
                     wizard.source_page_id = False
             else:
                 wizard.source_page_id = False
-                wizard.new_website_name = _("%s (Copia)") % wizard.source_website_id.name
-                if "company_id" in wizard.source_website_id._fields:
-                    wizard.new_website_company_id = wizard.source_website_id.company_id
+                wizard._set_new_website_defaults_from_website(wizard.source_website_id)
 
     @api.constrains("source_mode", "source_page_id", "source_website_id", "target_mode", "target_website_id")
     def _check_clone_scope(self):
@@ -1531,7 +1557,6 @@ class WebsitePageCloneWizard(models.TransientModel):
             self.write({"target_mode": "new", "target_website_id": False})
         if self.source_mode == "complete" and self.copy_shop and not self.copy_shop_products:
             self.write({"copy_shop_products": True})
-            self.copy_shop_products = True
 
         _logger.info(
             "Clone request: source_mode=%s source_page_id=%s source_website_id=%s target_mode=%s target_website_id=%s active_ids=%s copy_shop=%s copy_shop_settings=%s copy_shop_pricelists=%s copy_shop_categories=%s copy_shop_products=%s",
