@@ -612,7 +612,7 @@ class WebsitePageCloneWizard(models.TransientModel):
         pages |= homepage
 
         source_page_views = self.env["ir.ui.view"].sudo().search([
-            ("website_id", "=", source_website.id),
+            ("website_id", "in", [False, source_website.id]),
             ("page_ids", "!=", False),
         ])
         pages |= source_page_views.mapped("page_ids").filtered(
@@ -626,6 +626,36 @@ class WebsitePageCloneWizard(models.TransientModel):
             [(page.id, page.url, page.website_id.id if page.website_id else False) for page in effective_pages],
         )
         return effective_pages
+
+    def _resolve_target_page_for_source_page(self, source_page, target_website, page_map=None):
+        page_map = page_map or {}
+        if source_page.id in page_map:
+            return page_map[source_page.id]
+
+        page_model = self.env["website.page"].sudo()
+        target_page = page_model.search([
+            ("url", "=", source_page.url),
+            ("website_id", "=", target_website.id),
+        ], limit=1)
+        if target_page:
+            return target_page
+
+        return page_model.search([
+            ("url", "=", source_page.url),
+            ("website_id", "=", False),
+        ], limit=1)
+
+    def _mapped_page_ids(self, source_pages, target_website, page_map=None):
+        mapped_pages = self.env["website.page"].sudo().browse()
+        for source_page in source_pages:
+            target_page = self._resolve_target_page_for_source_page(
+                source_page,
+                target_website,
+                page_map=page_map,
+            )
+            if target_page:
+                mapped_pages |= target_page
+        return mapped_pages
 
     def _clone_website_rewrites(self, source_website, target_website, page_map=None):
         if "website.rewrite" not in self.env:
@@ -673,6 +703,79 @@ class WebsitePageCloneWizard(models.TransientModel):
                 continue
             custom_views |= view
         return custom_views
+
+    def _collect_page_bound_views(self, source_website, source_pages, include_shop=True):
+        view_model = self.env["ir.ui.view"].sudo()
+        domain = [
+            ("website_id", "in", [False, source_website.id]),
+            ("page_ids", "in", source_pages.ids),
+        ]
+        if "type" in view_model._fields:
+            domain.append(("type", "=", "qweb"))
+
+        source_views = view_model.search(domain, order="inherit_id,id")
+        main_page_view_ids = set(source_pages.mapped("view_id").ids)
+        page_bound_views = view_model.browse()
+        for view in source_views:
+            if view.id in main_page_view_ids:
+                continue
+            if not include_shop and self._is_shop_related_view(view):
+                continue
+            page_bound_views |= view
+        return page_bound_views
+
+    def _clone_page_bound_views(self, source_website, target_website, page_map, include_shop=True):
+        source_pages = self.env["website.page"].sudo().browse(list(page_map.keys()))
+        source_views = self._collect_page_bound_views(
+            source_website,
+            source_pages,
+            include_shop=include_shop,
+        )
+        if not source_views:
+            return
+
+        source_ids = set(source_views.ids)
+
+        def _depth(view):
+            depth = 0
+            parent = view.inherit_id
+            while parent and parent.id in source_ids:
+                depth += 1
+                parent = parent.inherit_id
+            return depth
+
+        ordered_source_views = sorted(source_views, key=lambda view: (_depth(view), view.id))
+        view_map = {}
+
+        for source_view in ordered_source_views:
+            defaults = {
+                "website_id": target_website.id,
+                "key": self._get_unique_view_key(source_view, target_website.id),
+            }
+            mapped_pages = self._mapped_page_ids(source_view.page_ids, target_website, page_map=page_map)
+            if "page_ids" in source_view._fields:
+                defaults["page_ids"] = [(6, 0, mapped_pages.ids)]
+
+            target_view = source_view.copy(default=defaults)
+            view_map[source_view.id] = target_view
+
+            if self.copy_translations and source_view.arch_db:
+                self._copy_translated_field_values(source_view, target_view, "arch_db")
+
+        for source_view in ordered_source_views:
+            inherit_view = source_view.inherit_id
+            if inherit_view and inherit_view.id in view_map:
+                inherit_view = view_map[inherit_view.id]
+            if inherit_view:
+                view_map[source_view.id].sudo().write({"inherit_id": inherit_view.id})
+
+        _logger.info(
+            "Page-bound views cloned: source_website_id=%s target_website_id=%s include_shop=%s count=%s",
+            source_website.id,
+            target_website.id,
+            include_shop,
+            len(ordered_source_views),
+        )
 
     def _cleanup_target_website_views(self, target_website, include_shop=True):
         target_views = self._collect_website_custom_views(target_website, include_shop=include_shop)
@@ -983,6 +1086,7 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         source_views = view_model.search(domain, order="inherit_id,id")
         shop_views = view_model.browse()
+        keyed_views = {}
         for view in source_views:
             if "page_ids" in view._fields and view.page_ids and not any(
                 self._is_shop_page(page) for page in view.page_ids
@@ -992,6 +1096,16 @@ class WebsitePageCloneWizard(models.TransientModel):
                 continue
             if self._is_shop_toggle_view_key(view.key):
                 continue
+            if view.key:
+                current_view = keyed_views.get(view.key)
+                if not current_view or (
+                    view.website_id and view.website_id.id == source_website.id and not current_view.website_id
+                ):
+                    keyed_views[view.key] = view
+                continue
+            shop_views |= view
+
+        for view in keyed_views.values():
             shop_views |= view
         return shop_views
 
@@ -1074,7 +1188,9 @@ class WebsitePageCloneWizard(models.TransientModel):
 
     def _sync_shop_header_bridge_views(self, source_website, target_website):
         for key in self._shop_header_bridge_view_keys():
-            source_view = self._get_website_view_by_key(source_website, key)
+            source_view = self._get_website_specific_view_by_key(source_website, key)
+            if not source_view:
+                source_view = self._get_website_view_by_key(source_website, key)
             if not source_view:
                 continue
 
@@ -1082,10 +1198,14 @@ class WebsitePageCloneWizard(models.TransientModel):
             if not target_view:
                 continue
 
+            source_state = bool(
+                source_website.with_context(website_id=source_website.id).is_view_active(key)
+            )
+
             write_vals = {
                 "name": source_view.name,
                 "priority": source_view.priority,
-                "active": source_view.active,
+                "active": source_state,
             }
             if source_view.arch_db:
                 write_vals["arch_db"] = source_view.arch_db
@@ -1099,7 +1219,7 @@ class WebsitePageCloneWizard(models.TransientModel):
                 key,
                 source_website.id,
                 target_website.id,
-                source_view.active,
+                source_state,
             )
 
     def _ensure_cart_link_visibility(self, source_website, target_website):
@@ -1340,7 +1460,7 @@ class WebsitePageCloneWizard(models.TransientModel):
                 template_xmlid,
             )
 
-    def _clone_shop_custom_views(self, source_website, target_website):
+    def _clone_shop_custom_views(self, source_website, target_website, page_map=None):
         source_views = self._collect_shop_custom_views(source_website)
         if not source_views:
             return
@@ -1377,12 +1497,27 @@ class WebsitePageCloneWizard(models.TransientModel):
                 }
                 if source_view.arch_db:
                     write_vals["arch_db"] = source_view.arch_db
+                if "page_ids" in source_view._fields:
+                    mapped_pages = self._mapped_page_ids(
+                        source_view.page_ids,
+                        target_website,
+                        page_map=page_map,
+                    )
+                    write_vals["page_ids"] = [(6, 0, mapped_pages.ids)]
                 target_view.write(write_vals)
             else:
-                target_view = source_view.copy(default={
+                defaults = {
                     "website_id": target_website.id,
                     "key": source_view.key,
-                })
+                }
+                if "page_ids" in source_view._fields:
+                    mapped_pages = self._mapped_page_ids(
+                        source_view.page_ids,
+                        target_website,
+                        page_map=page_map,
+                    )
+                    defaults["page_ids"] = [(6, 0, mapped_pages.ids)]
+                target_view = source_view.copy(default=defaults)
 
             view_map[source_view.id] = target_view
 
@@ -1621,11 +1756,9 @@ class WebsitePageCloneWizard(models.TransientModel):
 
         if self.copy_shop_settings:
             self._copy_shop_settings(source_website, target_website, pricelist_map, url_map=url_map)
-            self._clone_shop_custom_views(source_website, target_website)
+            self._clone_shop_custom_views(source_website, target_website, page_map=page_map)
             self._sync_shop_header_bridge_views(source_website, target_website)
             self._sync_shop_toggle_views(source_website, target_website)
-            self._ensure_cart_link_visibility(source_website, target_website)
-            self._force_cart_in_active_headers(target_website)
         if self.copy_shop_categories:
             category_map = self._clone_shop_categories(source_website, target_website, source_products)
         if self.copy_shop_products:
@@ -1690,6 +1823,7 @@ class WebsitePageCloneWizard(models.TransientModel):
                 self._cleanup_target_website_menus(target_website)
 
             target_page, page_map = self._clone_complete_pages(source_website, target_website)
+            self._clone_page_bound_views(source_website, target_website, page_map, include_shop=self.copy_shop)
             self._clone_complete_menu_tree(source_website, target_website, page_map)
             self._copy_website_settings(
                 source_website,
