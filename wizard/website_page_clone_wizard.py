@@ -978,6 +978,26 @@ class WebsitePageCloneWizard(models.TransientModel):
             return False
         return value
 
+    def _is_record_compatible_with_website(self, record, target_website):
+        if not record:
+            return True
+
+        if "company_id" in record._fields and record.company_id:
+            target_company = target_website.company_id if "company_id" in target_website._fields else False
+            if target_company and record.company_id != target_company:
+                return False
+
+        if "website_id" in record._fields and record.website_id and record.website_id != target_website:
+            return False
+
+        if "website_ids" in record._fields and record.website_ids and target_website not in record.website_ids:
+            return False
+
+        return True
+
+    def _filter_compatible_records(self, records, target_website):
+        return records.filtered(lambda record: self._is_record_compatible_with_website(record, target_website))
+
     def _copy_shop_settings(self, source_website, target_website, pricelist_map=None, url_map=None):
         pricelist_map = pricelist_map or {}
         vals = {}
@@ -992,13 +1012,35 @@ class WebsitePageCloneWizard(models.TransientModel):
             if field_name in ("pricelist_id", "shop_b2b_pricelist") and target_field.type == "many2one":
                 source_pricelist = source_website[field_name]
                 mapped_pricelist = pricelist_map.get(source_pricelist.id)
-                vals[field_name] = mapped_pricelist.id if mapped_pricelist else source_pricelist.id
+                if mapped_pricelist and self._is_record_compatible_with_website(mapped_pricelist, target_website):
+                    vals[field_name] = mapped_pricelist.id
+                elif self._is_record_compatible_with_website(source_pricelist, target_website):
+                    vals[field_name] = source_pricelist.id
                 continue
 
             if field_name == "pricelist_ids" and target_field.type == "many2many":
                 source_ids = source_website[field_name].ids
                 mapped_ids = [pricelist_map[pid].id for pid in source_ids if pid in pricelist_map]
-                vals[field_name] = [(6, 0, mapped_ids or source_ids)]
+                compatible_pricelists = self._filter_compatible_records(
+                    self.env["product.pricelist"].sudo().browse(mapped_ids or source_ids),
+                    target_website,
+                )
+                vals[field_name] = [(6, 0, compatible_pricelists.ids)]
+                continue
+
+            if field_name == "shop_placeholder_image" and target_field.type == "binary":
+                vals[field_name] = source_website[field_name]
+                continue
+
+            if target_field.type == "many2one":
+                source_record = source_website[field_name]
+                if self._is_record_compatible_with_website(source_record, target_website):
+                    vals[field_name] = source_record.id or False
+                continue
+
+            if target_field.type == "many2many":
+                source_records = self._filter_compatible_records(source_website[field_name], target_website)
+                vals[field_name] = [(6, 0, source_records.ids)]
                 continue
 
             prepared = self._prepare_write_value(target_field, source_website[field_name])
@@ -1566,6 +1608,7 @@ class WebsitePageCloneWizard(models.TransientModel):
         source_pricelists = self._get_source_pricelists(source_website)
         reused_global_pricelists = 0
         shared_specific_pricelists = 0
+        cloned_specific_pricelists = 0
         skipped_pricelists = 0
         for source_pricelist in source_pricelists:
             if "website_id" in source_pricelist._fields:
@@ -1577,20 +1620,48 @@ class WebsitePageCloneWizard(models.TransientModel):
                     pricelist_map[source_pricelist.id] = source_pricelist
                     shared_specific_pricelists += 1
                     continue
+                if source_pricelist.website_id == source_website:
+                    defaults = {"website_id": target_website.id}
+                    if "company_id" in source_pricelist._fields and "company_id" in target_website._fields:
+                        defaults["company_id"] = target_website.company_id.id or False
+                    cloned_pricelist = source_pricelist.copy(default=defaults)
+                    pricelist_map[source_pricelist.id] = cloned_pricelist
+                    cloned_specific_pricelists += 1
+                    continue
                 skipped_pricelists += 1
                 continue
 
             pricelist_map[source_pricelist.id] = source_pricelist
             reused_global_pricelists += 1
         _logger.info(
-            "Existing pricelists reused/shared: source_website_id=%s target_website_id=%s reused_global=%s shared_specific=%s skipped=%s",
+            "Pricelists processed: source_website_id=%s target_website_id=%s reused_global=%s shared_specific=%s cloned_specific=%s skipped=%s",
             source_website.id,
             target_website.id,
             reused_global_pricelists,
             shared_specific_pricelists,
+            cloned_specific_pricelists,
             skipped_pricelists,
         )
         return pricelist_map
+
+    def _clone_specific_shop_product(self, source_product, target_website, category_map):
+        defaults = {}
+        if "website_id" in source_product._fields:
+            defaults["website_id"] = target_website.id
+        if "public_categ_ids" in source_product._fields:
+            mapped_categ_ids = [
+                category_map[cid].id for cid in source_product.public_categ_ids.ids if cid in category_map
+            ]
+            defaults["public_categ_ids"] = [(6, 0, mapped_categ_ids or source_product.public_categ_ids.ids)]
+        cloned_product = source_product.copy(default=defaults)
+        publish_vals = {}
+        if "website_published" in source_product._fields:
+            publish_vals["website_published"] = source_product.website_published
+        if "is_published" in source_product._fields:
+            publish_vals["is_published"] = source_product.is_published
+        if publish_vals:
+            cloned_product.sudo().write(publish_vals)
+        return cloned_product
 
     def _get_source_shop_products(self, source_website):
         template_model = self.env["product.template"].sudo()
@@ -1686,6 +1757,7 @@ class WebsitePageCloneWizard(models.TransientModel):
         product_map = {}
         reused_global_products = 0
         linked_products = 0
+        cloned_specific_products = 0
         skipped_products = 0
         for source_product in source_products:
             vals = {}
@@ -1700,7 +1772,14 @@ class WebsitePageCloneWizard(models.TransientModel):
             elif "website_id" in source_product._fields:
                 is_global_product = not bool(source_product.website_id)
                 if source_product.website_id and source_product.website_id.id == source_website.id:
-                    skipped_products += 1
+                    cloned_product = self._clone_specific_shop_product(
+                        source_product,
+                        target_website,
+                        category_map,
+                    )
+                    product_map[source_product.id] = cloned_product
+                    cloned_specific_products += 1
+                    continue
                 elif source_product.website_id and source_product.website_id.id != target_website.id:
                     skipped_products += 1
             else:
@@ -1725,11 +1804,12 @@ class WebsitePageCloneWizard(models.TransientModel):
                 reused_global_products += 1
             product_map[source_product.id] = source_product
         _logger.info(
-            "Existing products reused/shared: source_website_id=%s target_website_id=%s reused_global=%s shared_specific=%s skipped=%s",
+            "Products processed: source_website_id=%s target_website_id=%s reused_global=%s shared_specific=%s cloned_specific=%s skipped=%s",
             source_website.id,
             target_website.id,
             reused_global_products,
             linked_products,
+            cloned_specific_products,
             skipped_products,
         )
         return product_map
