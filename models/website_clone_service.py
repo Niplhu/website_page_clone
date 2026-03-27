@@ -32,6 +32,7 @@ class WebsiteCloneService(models.AbstractModel):
         if clone_ecommerce:
             pricelist_map = self._clone_pricelists(source_website, target_website, copy_translations=copy_translations)
             self._apply_pricelist_mapping(source_website, target_website, pricelist_map)
+            self._copy_ecommerce_extra_fields(source_website, target_website)
 
         return {
             "pages": len(page_map),
@@ -52,21 +53,26 @@ class WebsiteCloneService(models.AbstractModel):
         if menus:
             menus.unlink()
 
-        rewrites = self.env["website.rewrite"].sudo().search([("website_id", "=", target_website.id)])
+        rewrites = self.env["website.rewrite"].sudo().with_context(active_test=False).search([
+            ("website_id", "=", target_website.id)
+        ])
         if rewrites:
             rewrites.unlink()
 
+        view_model = self.env["ir.ui.view"].sudo().with_context(active_test=False)
         view_domain = [("website_id", "=", target_website.id)]
-        if "type" in self.env["ir.ui.view"]._fields:
+        if "type" in view_model._fields:
             view_domain.append(("type", "=", "qweb"))
-        views = self.env["ir.ui.view"].sudo().search(view_domain)
-        if "page_ids" in self.env["ir.ui.view"]._fields:
+        views = view_model.search(view_domain)
+        if "page_ids" in view_model._fields:
             views = views.filtered(lambda v: not v.page_ids)
         if views:
             views.unlink()
 
         if cleanup_ecommerce and "website_id" in self.env["product.pricelist"]._fields:
-            pricelists = self.env["product.pricelist"].sudo().search([("website_id", "=", target_website.id)])
+            pricelists = self.env["product.pricelist"].sudo().with_context(active_test=False).search([
+                ("website_id", "=", target_website.id)
+            ])
             if pricelists:
                 pricelists.unlink()
 
@@ -85,6 +91,7 @@ class WebsiteCloneService(models.AbstractModel):
             "user_id",
             "menu_id",
             "domain_punycode",
+            "favicon",
         }
         values = self._prepare_write_values(source_website, target_website, excluded=excluded)
         if values:
@@ -214,7 +221,7 @@ class WebsiteCloneService(models.AbstractModel):
             })
 
     def _clone_non_page_qweb_views(self, source_website, target_website, copy_translations=True):
-        view_model = self.env["ir.ui.view"].sudo()
+        view_model = self.env["ir.ui.view"].sudo().with_context(active_test=False)
         domain = [("website_id", "=", source_website.id)]
         if "type" in view_model._fields:
             domain.append(("type", "=", "qweb"))
@@ -252,6 +259,18 @@ class WebsiteCloneService(models.AbstractModel):
             inherit_id = source_view.inherit_id
             if inherit_id and inherit_id.id in cloned_map:
                 target_view.write({"inherit_id": cloned_map[inherit_id.id].id})
+
+    def _copy_ecommerce_extra_fields(self, source_website, target_website):
+        if "shop_extra_field_ids" not in source_website._fields:
+            return
+
+        extra_field_model = self.env["website.sale.extra.field"].sudo()
+        target_extra_fields = extra_field_model.search([("website_id", "=", target_website.id)])
+        if target_extra_fields:
+            target_extra_fields.unlink()
+
+        for source_extra_field in source_website.sudo().shop_extra_field_ids:
+            source_extra_field.copy(default={"website_id": target_website.id})
 
     def _clone_pricelists(self, source_website, target_website, copy_translations=True):
         pricelist_map = {}
