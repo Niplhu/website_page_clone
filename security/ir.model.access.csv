@@ -1,2 +1,3 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_website_clone_wizard_designer,website.clone.wizard,model_website_clone_wizard,website.group_website_designer,1,1,1,1
+access_website_page_clone_wizard_designer,website.page.clone.wizard,model_website_page_clone_wizard,website.group_website_designer,1,1,1,1

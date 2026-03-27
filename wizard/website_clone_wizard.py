@@ -109,3 +109,9 @@ class WebsiteCloneWizard(models.TransientModel):
                 },
             },
         }
+
+
+class WebsitePageCloneWizard(models.TransientModel):
+    _name = "website.page.clone.wizard"
+    _inherit = "website.clone.wizard"
+    _description = "Alias heredado del asistente de clonado de sitios web"
