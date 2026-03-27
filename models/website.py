@@ -8,16 +8,7 @@ class Website(models.Model):
         self.ensure_one()
         action = self.env.ref("website_page_clone.action_website_clone_wizard").read()[0]
         action["context"] = {
-            "active_model": "website",
-            "active_id": self.id,
-            "active_ids": [self.id],
-            "default_source_mode": "complete",
             "default_source_website_id": self.id,
             "default_target_mode": "new",
-            "default_copy_shop": True,
-            "default_copy_shop_settings": True,
-            "default_copy_shop_pricelists": True,
-            "default_copy_shop_categories": True,
-            "default_copy_shop_products": True,
         }
         return action

@@ -1,1 +1,1 @@
-from . import website_page_clone_wizard
+from . import website_clone_wizard

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_website_clone_wizard_form" model="ir.ui.view">
+        <field name="name">website.clone.wizard.form</field>
+        <field name="model">website.clone.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Clonar sitio web 1:1">
+                <group>
+                    <group>
+                        <field name="source_website_id"/>
+                        <field name="target_mode"/>
+                        <field name="target_website_id" invisible="target_mode != 'existing'" required="target_mode == 'existing'" domain="[('id', '!=', source_website_id)]"/>
+                        <field name="new_website_name" invisible="target_mode != 'new'" required="target_mode == 'new'"/>
+                        <field name="new_website_domain" invisible="target_mode != 'new'"/>
+                        <field name="new_website_company_id" invisible="target_mode != 'new'"/>
+                    </group>
+                    <group>
+                        <field name="clone_ecommerce"/>
+                        <field name="copy_translations"/>
+                        <field name="replace_target_content"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_clone" type="object" string="Clonar" class="btn-primary"/>
+                    <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_website_clone_wizard" model="ir.actions.act_window">
+        <field name="name">Clonar sitio web</field>
+        <field name="res_model">website.clone.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="view_id" ref="view_website_clone_wizard_form"/>
+    </record>
+</odoo>
