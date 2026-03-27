@@ -11,14 +11,5 @@
         <field name="context">{'default_source_website_id': active_id, 'default_target_mode': 'new'}</field>
     </record>
 
-    <record id="action_website_clone_wizard_binding_page" model="ir.actions.act_window">
-        <field name="name">Clonar sitio web</field>
-        <field name="res_model">website.clone.wizard</field>
-        <field name="view_mode">form</field>
-        <field name="target">new</field>
-        <field name="view_id" ref="website_page_clone.view_website_clone_wizard_form"/>
-        <field name="binding_model_id" ref="website.model_website_page"/>
-        <field name="binding_view_types">list,form</field>
-        <field name="context">{'default_target_mode': 'new'}</field>
-    </record>
+    <delete id="action_website_clone_wizard_binding_page" model="ir.actions.act_window"/>
 </odoo>
